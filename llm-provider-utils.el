@@ -115,5 +115,54 @@ things.  Providers should probably issue a warning when using this."
     ((string-match-p "llama" model) 2048)
     ((string-match-p "starcoder" model) 8192))))
 
+;; See https://json-schema.org/understanding-json-schema.
+(defun llm-provider-utils-openai-function-spec (call)
+  "Convert `llm-function-call' CALL to an Open AI function spec.
+Open AI's function spec is a standard way to do this, and will be
+applicable to many endpoints.
+
+This returns a JSON object (a list that can be converted to JSON)."
+  `(((type . function)
+     (function
+      .
+      ,(append
+        `((name . ,(llm-function-call-name call))
+          (description . ,(llm-function-call-description call)))
+        (when (llm-function-call-args call)
+          `((parameters
+             .
+             ((type . object)
+              (properties
+               .
+               ,(mapcar (lambda (arg)
+                          `(,(llm-function-arg-name arg) .
+                                   ,(append
+                                     `((type .
+                                             ,(pcase (llm-function-arg-type arg)
+                                                ('string 'string)
+                                                ('integer 'integer)
+                                                ('float 'number)
+                                                ('boolean 'boolean)
+                                                ((cl-type cons)
+                                                 (pcase (car (llm-function-arg-type arg))
+                                                   ('or (cdr (llm-function-arg-type arg)))
+                                                   ('list 'array)
+                                                   ('enum 'string)))
+                                                (_ (error "Unknown argument type: " (llm-function-arg-type arg))))))
+                                     (when (llm-function-arg-description arg)
+                                       `((description
+                                          .
+                                          ,(llm-function-arg-description arg))))
+                                     (when (and (eq 'cons
+                                                    (type-of (llm-function-arg-type arg))))
+                                       (pcase (car (llm-function-arg-type arg))
+                                                  ('enum `((enum
+                                                            .
+                                                            ,(cdr (llm-function-arg-type arg)))))
+                                                  ('list `((items . ((type . ,(cadr (llm-function-arg-type arg))))))))))))
+                              (llm-function-call-args call)))
+              (required . ,(mapcar #'llm-function-arg-name
+                                   (seq-filter #'llm-function-arg-required (llm-function-call-args call)))))))))))))
+
 (provide 'llm-provider-utils)
 ;;; llm-provider-utils.el ends here

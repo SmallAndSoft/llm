@@ -104,6 +104,40 @@ MAX-TOKENS is the maximum number of tokens to generate.  This is optional."
 ROLE can a symbol, of either `user' or `assistant'."
   role content)
 
+(cl-defstruct llm-function-call
+  "This is a struct to represent a function call the LLM can make.
+
+FUNCTION is a function to call.
+
+NAME is a human readable name of the function.
+
+DESCRIPTION is a human readable description of the function.
+
+ARGS is a list of `llm-function-arg' structs. "
+  function
+  name
+  description
+  args)
+
+(cl-defstruct llm-function-arg
+  "An argument to an `llm-function-call'.
+
+NAME is the name of the argument.
+
+DESCRIPTION is a human readable description of the argument. It
+can be nil for enums.
+
+TYPE is the type of the argument. It can be one of `string',
+`integer', `float', `boolean' or the special lists, `(or <type1>
+<type2> ... <typen>)', `(enum <string1> <string2> ...
+<stringn>)', or `(list <type>)'.
+
+REQUIRED is whether this is required or not."
+  name
+  description
+  type
+  required)
+
 (cl-defun llm--log (type &key provider prompt msg)
   "Log a MSG of TYPE, given PROVIDER, PROMPT, and MSG.
 These are all optional, each one should be the normal meaning of
