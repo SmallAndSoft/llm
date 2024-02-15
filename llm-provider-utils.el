@@ -168,5 +168,58 @@ This returns a JSON object (a list that can be converted to JSON)."
                  (when required
                    `((required . ,required))))))))))))
 
+(defun llm-provider-utils-append-to-prompt (prompt output)
+  "Append OUTPUT to PROMPT as an assistant interaction.
+If OUTPUT is a function call, just convert it to JSON and append
+that as the recorded assistant interaction."
+  (setf (llm-chat-prompt-interactions prompt)
+        (append (llm-chat-prompt-interactions prompt)
+                (list (make-llm-chat-prompt-interaction
+                       :role 'assistant
+                       :content output)))))
+
+(defun llm-provider-utils-execute-openai-function-calls (provider prompt response)
+  "From OpenAI-compatible RESPONSE, execute function call.
+
+This should be called with any response that might have function
+calls. If the response is a string, nothing will happen, but in
+either case, the response suitable for returning to the client
+will be returned.
+
+PROVIDER is the provider that supplied the response.
+
+PROMPT was the prompt given to the provider.
+
+This returns the response suitable for output to the client; a
+cons of functions called and their output."
+  (or (when (consp response)
+        ;; Then this must be a function call, return the cons of a the funcion
+        ;; called and the result.
+        (cl-loop for func in response collect
+                 (let* ((name (assoc-default 'name (cdr func)))
+                        (arguments (json-read-from-string
+                                    (assoc-default 'arguments (cdr func))))
+                        (function (seq-find
+                                   (lambda (f) (equal name (llm-function-call-name f)))
+                                   (llm-chat-prompt-functions prompt))))
+                   (cons (intern name)
+                         (let* ((args (cl-loop for arg in (llm-function-call-args function)
+                                               collect (cdr (seq-find (lambda (a)
+                                                                        (eq (intern
+                                                                             (llm-function-arg-name arg))
+                                                                            (car a)))
+                                                                      arguments))))
+                                (result (apply (llm-function-call-function function) args)))
+                           (llm--log
+                            'api-funcall
+                            :provider provider
+                            :msg (format "%s --> %s"
+                                         (format "%S"
+                                                 (cons (llm-function-call-name function)
+                                                       args))
+                                         (format "%s" result)))
+                           result)))))
+      response))
+
 (provide 'llm-provider-utils)
 ;;; llm-provider-utils.el ends here

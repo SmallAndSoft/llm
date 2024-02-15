@@ -91,13 +91,25 @@ function, for continuing chats, the whole prompt MUST be a
 variable passed in to the chat function. INTERACTIONS is
 required.
 
+FUNCTIONS is a list of `llm-function-call' structs. These may be
+called IF the LLM supports them. If the LLM does not support
+them, a `not-implemented' signal will be thrown. This is
+optional. When this is given, the LLM will either call the
+function or return text as normal, depending on what the LLM
+decides. This can be influenced by the `forced-function'
+parameter.
+
+FORCED-FUNCTION is the name of the function call to force or
+`none' to not call any function, or `auto', the default, to let
+the LLM decide which functions to call.
+
 TEMPERATURE is a floating point number with a minimum of 0, and
 maximum of 1, which controls how predictable the result is, with
 0 being the most predicatable, and 1 being the most creative.
 This is not required.
 
 MAX-TOKENS is the maximum number of tokens to generate.  This is optional."
-  context examples interactions temperature max-tokens)
+  context examples interactions functions forced-function temperature max-tokens)
 
 (cl-defstruct llm-chat-prompt-interaction
   "This defines a single interaction given as part of a chat prompt.
@@ -194,7 +206,7 @@ need to override it."
   (ignore provider)
   nil)
 
-(cl-defgeneric llm-chat (provider prompt &key functions forced-function)
+(cl-defgeneric llm-chat (provider prompt)
   "Return a response to PROMPT from PROVIDER.
 PROMPT is a `llm-chat-prompt'.
 
@@ -203,31 +215,22 @@ not called. If functions are called, the response is a list of
 conses of the function named called (as a symbol), and the
 corresponding result from calling it.
 
-FUNCTIONS is a list of `llm-function-call' structs.
-
-FORCED-FUNCTION is the name of the function call to force or
-`none' to not call any function, or `auto', the default, to let
-the LLM decide which functions to call.
-
 The prompt's interactions list will be updated to encode the
 conversation so far."
-  (ignore provider prompt functions forced-function)
+  (ignore provider prompt)
   (signal 'not-implemented nil))
 
-(cl-defmethod llm-chat ((_ (eql nil)) _ &key functions forced-function)
+(cl-defmethod llm-chat ((_ (eql nil)) _)
   "Catch trivial configuration mistake."
-  (ignore functions forced-function)
   (error "LLM provider was nil.  Please set the provider in the application you are using"))
 
-(cl-defmethod llm-chat :before (provider _ &key functions forced-function)
+(cl-defmethod llm-chat :before (provider _)
   "Issue a warning if the LLM is non-free."
-  (ignore functions forced-function)
   (when-let (info (llm-nonfree-message-info provider))
     (llm--warn-on-nonfree (car info) (cdr info))))
 
-(cl-defmethod llm-chat :around (provider prompt &key functions forced-function)
+(cl-defmethod llm-chat :around (provider prompt)
   "Log the input to llm-chat."
-  (ignore functions forced-function)
   (llm--log 'api-send :provider provider :prompt prompt)
   ;; We set the debug flag to nil around the next-method so that we don't log
   ;; twice.
@@ -238,9 +241,14 @@ conversation so far."
       (llm--log 'api-receive :provider provider :msg result))
     result))
 
-(cl-defgeneric llm-chat-async (provider prompt response-callback error-callback
-                                        &key functions forced-function)
-  "Return a response to PROMPT from PROVIDER.
+(cl-defgeneric llm-chat-async (provider prompt response-callback error-callback)
+  "Call RESPONSE-CALLBACK with a response to PROMPT from PROVIDER.
+
+The response is a string response by the LLM when functions are
+not called. If functions are called, the response is a list of
+conses of the function named called (as a symbol), and the
+corresponding result from calling it.
+
 PROMPT is a `llm-chat-prompt'.
 
 RESPONSE-CALLBACK receives the final text.
@@ -249,12 +257,6 @@ ERROR-CALLBACK receives the error response.
 
 The prompt's interactions list will be updated to encode the
 conversation so far.
-
-FUNCTIONS is a list of `llm-function-call' structs.
-
-FORCED-FUNCTION is the name of the function call to force or
-`none' to not call any function, or `auto', the default, to let
-the LLM decide which functions to call.
 
 This returns an object representing the async request, which can
 be passed to `llm-cancel-request'."
@@ -266,15 +268,11 @@ be passed to `llm-cancel-request'."
                       nil
                       (lambda (text)
                         (funcall response-callback text))
-                      (lambda (err msg) (funcall error-callback err msg))
-                      :functions functions
-                      :forced-function forced-function))
+                      (lambda (err msg) (funcall error-callback err msg))))
 
-(cl-defmethod llm-chat-async :around (provider prompt response-callback error-callback
-                                               &key functions forced-function)
+(cl-defmethod llm-chat-async :around (provider prompt response-callback error-callback)
   "Log the input to llm-chat-async."
   (llm--log 'api-send :provider provider :prompt prompt)
-  (ignore functions forced-function)
   (let* ((new-response-callback (lambda (response)
                                   (llm--log 'api-receive :provider provider :msg response)
                                   (let ((llm-log nil))
@@ -291,14 +289,17 @@ be passed to `llm-cancel-request'."
     
     result))
 
-(cl-defmethod llm-chat-function-call ((_ (eql nil)) _ _ _ &key functions forced-function)
-  (ignore functions forced-function)
+(cl-defmethod llm-chat-function-call ((_ (eql nil)) _ _ _)
   (error "LLM provider was nil.  Please set the provider in the application you are using."))
 
-(cl-defgeneric llm-chat-streaming (provider prompt partial-callback response-callback error-callback
-                                            &key functions forced-function)
+(cl-defgeneric llm-chat-streaming (provider prompt partial-callback response-callback error-callback)
   "Stream a response to PROMPT from PROVIDER.
 PROMPT is a `llm-chat-prompt'.
+
+The response is a string response by the LLM when functions are
+not called. If functions are called, the response is a list of
+conses of the function named called (as a symbol), and the
+corresponding result from calling it.
 
 PARTIAL-CALLBACK is called with the output of the string response
 as it is built up. The callback is called with the entire
@@ -315,37 +316,26 @@ final text.
 
 ERROR-CALLBACK receives the error response.
 
-FUNCTIONS is a list of `llm-function-call' structs.
-
-FORCED-FUNCTION is the name of the function call to force or
-`none' to not call any function, or `auto', the default, to let
-the LLM decide which functions to call.
-
 The prompt's interactions list will be updated to encode the
 conversation so far.
 
 This returns an object representing the async request, which can
 be passed to `llm-cancel-request'."
-  (ignore provider prompt partial-callback response-callback error-callback
-          functions forced-function)
+  (ignore provider prompt partial-callback response-callback error-callback)
   (signal 'not-implemented nil))
 
-(cl-defmethod llm-chat-streaming ((_ (eql nil)) _ _ _ _ &key functions forced-function)
+(cl-defmethod llm-chat-streaming ((_ (eql nil)) _ _ _ _)
   "Catch trivial configuration mistake."
-  (ignore functions forced-function)
   (error "LLM provider was nil.  Please set the provider in the application you are using"))
 
-(cl-defmethod llm-chat-streaming :before (provider _ _ _ _ &key functions forced-function)
+(cl-defmethod llm-chat-streaming :before (provider _ _ _ _)
   "Issue a warning if the LLM is non-free."
-  (ignore functions forced-function)
   (when-let (info (llm-nonfree-message-info provider))
     (llm--warn-on-nonfree (car info) (cdr info))))
 
-(cl-defmethod llm-chat-streaming :around (provider prompt partial-callback response-callback error-callback
-                                                   &key functions forced-function)
+(cl-defmethod llm-chat-streaming :around (provider prompt partial-callback response-callback error-callback)
   "Log the input to llm-chat-async."
   (llm--log 'api-send :provider provider :prompt prompt)
-  (ignore functions forced-function)
   ;; We need to wrap the callbacks before we set llm-log to nil. 
   (let* ((new-partial-callback (lambda (response)
                                  (when partial-callback
