@@ -223,17 +223,23 @@ STREAMING if non-nil, turn on response streaming."
                  (let* ((name (assoc-default 'name (cdr func)))
                         (arguments (json-read-from-string
                                     (assoc-default 'arguments (cdr func))))
-                        (function (seq-find (lambda (f) (equal name (llm-function-call-name 
-f)))
+                        (function (seq-find
+                                   (lambda (f) (equal name (llm-function-call-name f)))
                                             functions)))
                    (cons (intern name)
-                         (apply (llm-function-call-function function)
-                          (cl-loop for arg in (llm-function-call-args function)
+                         (let ((result (apply (llm-function-call-function function)
+                                (cl-loop for arg in (llm-function-call-args function)
                                    collect (cdr (seq-find (lambda (a)
                                                             (eq (intern
                                                                  (llm-function-arg-name arg))
                                                                 (car a)))
-                                                          arguments)))))))
+                                                          arguments))))))
+                           (llm--log 'api-funcall
+                                   :provider provider
+                                   :msg (format "%s --> %s"
+                                                (format "%s" (cons (llm-function-call-name function) args))
+                                                (format "%s" result)))
+                           result))))
       response)))
 
 (defvar-local llm-openai-current-response ""

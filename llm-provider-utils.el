@@ -168,25 +168,5 @@ This returns a JSON object (a list that can be converted to JSON)."
                  (when required
                    `((required . ,required))))))))))))
 
-(defun llm-provider-utils-handle-function-call (prompt functions error-callback response)
-  "Handle RESPONSE from a function call."
-  (let ((response (json-read-from-string response)))
-    (cl-loop for call in (assoc-default 'function (assoc-default 'tool-calls response)) do
-             (let* ((function (seq-find (lambda (func) (equal (assoc-default 'name call)
-                                                              (llm-function-call-name func)))
-                                        functions))
-                    (args (mapcar (lambda (arg)
-                                    (cdr (seq-find (lambda (fa)
-                                                    (equal (car arg)
-                                                           (llm-function-arg-name fa)))
-                                                   (llm-function-call-args call))))
-                                 (assoc-default 'arguments call))))
-               (if function
-                   (if (seq-every-p #'identity args)
-                       (apply (llm-function-call-function function) args)
-                     (funcall error-callback 'error (format "Some arguments for function call '%s' are missing" (assoc-default 'name call))))
-                 (funcall error-callback 'error (format "Returned function call '%s' does not exist" (assoc-default 'name call))))
-               ))))
-
 (provide 'llm-provider-utils)
 ;;; llm-provider-utils.el ends here
