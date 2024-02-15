@@ -134,10 +134,10 @@ This is just the key, if it exists."
                :data (llm-openai--embedding-request (llm-openai-embedding-model provider) string))
    #'llm-openai--embedding-extract-response))
 
-(defun llm-openai--chat-request (model prompt &optional return-json-spec streaming)
+(defun llm-openai--chat-request (model prompt &optional functions forced-function streaming)
   "From PROMPT, create the chat request data to send.
 MODEL is the model name to use.
-RETURN-JSON-SPEC is the optional specification for the JSON to return.
+FUNCTIONS is a list of functions to call, or nil if none.
 STREAMING if non-nil, turn on response streaming."
   (let (request-alist)
     (llm-provider-utils-combine-to-system-prompt prompt llm-openai-example-prelude)
@@ -155,25 +155,37 @@ STREAMING if non-nil, turn on response streaming."
       (push `("temperature" . ,(/ (llm-chat-prompt-temperature prompt) 2.0)) request-alist))
     (when (llm-chat-prompt-max-tokens prompt)
       (push `("max_tokens" . ,(llm-chat-prompt-max-tokens prompt)) request-alist))
-    (when return-json-spec
-      (push `("functions" . ((("name" . "output")
-                              ("parameters" . ,return-json-spec))))
-            request-alist)
-      (push '("function_call" . (("name" . "output"))) request-alist))
+    (when functions
+      (push `("tools" . ,(mapcar #'llm-provider-utils-openai-function-spec functions))
+            request-alist))
+    (when forced-function
+      (push `("tool_choice" . ,(pcase forced-function
+                                 ("auto" "auto")
+                                 ("none" "none")
+                                 (_ `(("type" . "function")
+                                      ("function" . (("name" . ,forced-function)))))))
+
+            request-alist))
     request-alist))
 
 (defun llm-openai--extract-chat-response (response)
   "Return chat response from server RESPONSE."
   (let ((result (cdr (assoc 'content (cdr (assoc 'message (aref (cdr (assoc 'choices response)) 0))))))
-        (func-result (cdr (assoc 'arguments (cdr (assoc 'function_call (cdr (assoc 'message (aref (cdr (assoc 'choices response)) 0)))))))))
+        (func-result (mapcar #'cl-third
+                             (assoc-default
+                              'tool_calls
+                              (assoc-default 'message
+                                             (aref (assoc-default 'choices response) 0))))))
     (or func-result result)))
 
-(cl-defmethod llm-chat-async ((provider llm-openai) prompt response-callback error-callback)
+(cl-defmethod llm-chat-async ((provider llm-openai) prompt response-callback error-callback
+                              &key functions forced-function)
   (llm-openai--check-key provider)
   (let ((buf (current-buffer)))
     (llm-request-async (llm-openai--url provider "chat/completions")
       :headers (llm-openai--headers provider)
-      :data (llm-openai--chat-request (llm-openai-chat-model provider) prompt)
+      :data (llm-openai--chat-request (llm-openai-chat-model provider) prompt
+                                      functions forced-function)
       :on-success (lambda (data)
                     (let ((response (llm-openai--extract-chat-response data)))
                       (setf (llm-chat-prompt-interactions prompt)
@@ -187,18 +199,42 @@ STREAMING if non-nil, turn on response streaming."
                                      (cdr (assoc 'type errdata))
                                      (cdr (assoc 'message errdata)))))))))
 
-(cl-defmethod llm-chat ((provider llm-openai) prompt)
+(cl-defmethod llm-chat ((provider llm-openai) prompt &key functions forced-function)
   (llm-openai--check-key provider)
   (let ((response (llm-openai--handle-response
                    (llm-request-sync (llm-openai--url provider "chat/completions")
                                      :headers (llm-openai--headers provider)
                                      :data (llm-openai--chat-request (llm-openai-chat-model provider)
-                                                                     prompt))
+                                                                     prompt
+                                                                     functions
+                                                                     forced-function))
                    #'llm-openai--extract-chat-response)))
     (setf (llm-chat-prompt-interactions prompt)
           (append (llm-chat-prompt-interactions prompt)
-                  (list (make-llm-chat-prompt-interaction :role 'assistant :content response))))
-    response))
+                  (list (make-llm-chat-prompt-interaction
+                         :role 'assistant
+                         :content (if (stringp response)
+                                      response
+                                    (json-encode response))))))
+    (if (consp response)
+        ;; Then this must be a function call, return the cons of a the funcion
+        ;; called and the result.
+        (cl-loop for func in response collect
+                 (let* ((name (assoc-default 'name (cdr func)))
+                        (arguments (json-read-from-string
+                                    (assoc-default 'arguments (cdr func))))
+                        (function (seq-find (lambda (f) (equal name (llm-function-call-name 
+f)))
+                                            functions)))
+                   (cons (intern name)
+                         (apply (llm-function-call-function function)
+                          (cl-loop for arg in (llm-function-call-args function)
+                                   collect (cdr (seq-find (lambda (a)
+                                                            (eq (intern
+                                                                 (llm-function-arg-name arg))
+                                                                (car a)))
+                                                          arguments)))))))
+      response)))
 
 (defvar-local llm-openai-current-response ""
   "The response so far from the server.")
@@ -243,12 +279,15 @@ them from 1 to however many are sent.")
         (setq llm-openai-last-response last-response))
     current-response))
 
-(cl-defmethod llm-chat-streaming ((provider llm-openai) prompt partial-callback response-callback error-callback)
+(cl-defmethod llm-chat-streaming ((provider llm-openai) prompt partial-callback
+                                  response-callback error-callback
+                                  &keys functions forced-function)
   (llm-openai--check-key provider)
   (let ((buf (current-buffer)))
     (llm-request-async (llm-openai--url provider "chat/completions")
                        :headers (llm-openai--headers provider)
-                       :data (llm-openai--chat-request (llm-openai-chat-model provider) prompt nil t)
+                       :data (llm-openai--chat-request (llm-openai-chat-model provider) prompt
+                                                       functions forced-function t)
                        :on-error (lambda (_ data)
                                    (let ((errdata (cdr (assoc 'error data))))
                                      (llm-request-callback-in-buffer buf error-callback 'error

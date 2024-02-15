@@ -193,26 +193,29 @@ need to override it."
   (ignore provider)
   nil)
 
-(cl-defgeneric llm-chat (provider prompt)
+(cl-defgeneric llm-chat (provider prompt &key functions forced-function)
   "Return a response to PROMPT from PROVIDER.
 PROMPT is a `llm-chat-prompt'. The response is a string response by the LLM.
 
 The prompt's interactions list will be updated to encode the
 conversation so far."
-  (ignore provider prompt)
+  (ignore provider prompt functions forced-function)
   (signal 'not-implemented nil))
 
-(cl-defmethod llm-chat ((_ (eql nil)) _)
+(cl-defmethod llm-chat ((_ (eql nil)) _ &key functions forced-function)
   "Catch trivial configuration mistake."
+  (ignore functions forced-function)
   (error "LLM provider was nil.  Please set the provider in the application you are using"))
 
-(cl-defmethod llm-chat :before (provider _)
+(cl-defmethod llm-chat :before (provider _ &key functions forced-function)
   "Issue a warning if the LLM is non-free."
+  (ignore functions forced-function)
   (when-let (info (llm-nonfree-message-info provider))
     (llm--warn-on-nonfree (car info) (cdr info))))
 
-(cl-defmethod llm-chat :around (provider prompt)
+(cl-defmethod llm-chat :around (provider prompt &key functions forced-function)
   "Log the input to llm-chat."
+  (ignore functions forced-function)
   (llm--log 'api-send :provider provider :prompt prompt)
   ;; We set the debug flag to nil around the next-method so that we don't log
   ;; twice.
@@ -222,7 +225,8 @@ conversation so far."
     (llm--log 'api-receive :provider provider :msg result)
     result))
 
-(cl-defgeneric llm-chat-async (provider prompt response-callback error-callback)
+(cl-defgeneric llm-chat-async (provider prompt response-callback error-callback
+                                        &key functions forced-function)
   "Return a response to PROMPT from PROVIDER.
 PROMPT is a `llm-chat-prompt'.
 
@@ -263,6 +267,29 @@ be passed to `llm-cancel-request'."
                                       new-error-callback)))
     
     result))
+
+(cl-defgeneric llm-chat-function-call (provider prompt functions error-callback)
+  "Intruct the LLM to take PROMPT and call one of FUNCTIONS.
+
+This will run asynchronously, returning an object representing
+the async request, which can be passed to `llm-cancel-request'.
+It will call one or more of FUNCTIONS.
+
+PROVIDER is a provider that supports function calling (otherwise
+an error will occur).
+
+PROMPT is a prompt that can have a conversation as normal.
+
+FUNCTIONS is a list of `llm-function-call' structs. One or
+multiple of these can be called by the LLM.
+
+ERROR-CALLBACK receives the error response if there was issue
+communicating with the LLM."
+  (ignore provider prompt functions error-callback)
+  (signal 'not-implemented nil))
+
+(cl-defmethod llm-chat-function-call ((_ (eql nil)) _ _ _)
+  (error "LLM provider was nil.  Please set the provider in the application you are using."))
 
 (cl-defgeneric llm-chat-streaming (provider prompt partial-callback response-callback error-callback)
   "Stream a response to PROMPT from PROVIDER.

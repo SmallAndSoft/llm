@@ -122,7 +122,7 @@ Open AI's function spec is a standard way to do this, and will be
 applicable to many endpoints.
 
 This returns a JSON object (a list that can be converted to JSON)."
-  `(((type . function)
+  `((type . function)
      (function
       .
       ,(append
@@ -131,38 +131,62 @@ This returns a JSON object (a list that can be converted to JSON)."
         (when (llm-function-call-args call)
           `((parameters
              .
-             ((type . object)
-              (properties
-               .
-               ,(mapcar (lambda (arg)
-                          `(,(llm-function-arg-name arg) .
-                                   ,(append
-                                     `((type .
-                                             ,(pcase (llm-function-arg-type arg)
-                                                ('string 'string)
-                                                ('integer 'integer)
-                                                ('float 'number)
-                                                ('boolean 'boolean)
-                                                ((cl-type cons)
-                                                 (pcase (car (llm-function-arg-type arg))
-                                                   ('or (cdr (llm-function-arg-type arg)))
-                                                   ('list 'array)
-                                                   ('enum 'string)))
-                                                (_ (error "Unknown argument type: " (llm-function-arg-type arg))))))
-                                     (when (llm-function-arg-description arg)
-                                       `((description
-                                          .
-                                          ,(llm-function-arg-description arg))))
-                                     (when (and (eq 'cons
-                                                    (type-of (llm-function-arg-type arg))))
-                                       (pcase (car (llm-function-arg-type arg))
-                                                  ('enum `((enum
-                                                            .
-                                                            ,(cdr (llm-function-arg-type arg)))))
-                                                  ('list `((items . ((type . ,(cadr (llm-function-arg-type arg))))))))))))
-                              (llm-function-call-args call)))
-              (required . ,(mapcar #'llm-function-arg-name
-                                   (seq-filter #'llm-function-arg-required (llm-function-call-args call)))))))))))))
+             ,(let ((required (mapcar
+                               #'llm-function-arg-name
+                               (seq-filter #'llm-function-arg-required (llm-function-call-args call)))))
+                (append
+                 `((type . object)
+                   (properties
+                    .
+                    ,(mapcar (lambda (arg)
+                               `(,(llm-function-arg-name arg) .
+                                 ,(append
+                                   `((type .
+                                           ,(pcase (llm-function-arg-type arg)
+                                              ('string 'string)
+                                              ('integer 'integer)
+                                              ('float 'number)
+                                              ('boolean 'boolean)
+                                              ((cl-type cons)
+                                               (pcase (car (llm-function-arg-type arg))
+                                                 ('or (cdr (llm-function-arg-type arg)))
+                                                 ('list 'array)
+                                                 ('enum 'string)))
+                                              (_ (error "Unknown argument type: " (llm-function-arg-type arg))))))
+                                   (when (llm-function-arg-description arg)
+                                     `((description
+                                        .
+                                        ,(llm-function-arg-description arg))))
+                                   (when (and (eq 'cons
+                                                  (type-of (llm-function-arg-type arg))))
+                                     (pcase (car (llm-function-arg-type arg))
+                                       ('enum `((enum
+                                                 .
+                                                 ,(cdr (llm-function-arg-type arg)))))
+                                       ('list `((items . ((type . ,(cadr (llm-function-arg-type arg))))))))))))
+                             (llm-function-call-args call))))
+                 (when required
+                   `((required . ,required))))))))))))
+
+(defun llm-provider-utils-handle-function-call (prompt functions error-callback response)
+  "Handle RESPONSE from a function call."
+  (let ((response (json-read-from-string response)))
+    (cl-loop for call in (assoc-default 'function (assoc-default 'tool-calls response)) do
+             (let* ((function (seq-find (lambda (func) (equal (assoc-default 'name call)
+                                                              (llm-function-call-name func)))
+                                        functions))
+                    (args (mapcar (lambda (arg)
+                                    (cdr (seq-find (lambda (fa)
+                                                    (equal (car arg)
+                                                           (llm-function-arg-name fa)))
+                                                   (llm-function-call-args call))))
+                                 (assoc-default 'arguments call))))
+               (if function
+                   (if (seq-every-p #'identity args)
+                       (apply (llm-function-call-function function) args)
+                     (funcall error-callback 'error (format "Some arguments for function call '%s' are missing" (assoc-default 'name call))))
+                 (funcall error-callback 'error (format "Returned function call '%s' does not exist" (assoc-default 'name call))))
+               ))))
 
 (provide 'llm-provider-utils)
 ;;; llm-provider-utils.el ends here
