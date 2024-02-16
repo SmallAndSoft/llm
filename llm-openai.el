@@ -219,6 +219,11 @@ STREAMING if non-nil, turn on response streaming."
 The responses from OpenAI are not numbered, but we just number
 them from 1 to however many are sent.")
 
+(defun llm-openai--reset-partial-chat-response ()
+  "Reset the partial chat response."
+  (setq llm-openai-current-response "")
+  (setq llm-openai-last-response 0))
+
 (defun llm-openai--get-partial-chat-response (response)
   "Return the text in the partial chat response from RESPONSE."
   ;; To begin with, we should still be in the buffer with the actual response.
@@ -233,26 +238,61 @@ them from 1 to however many are sent.")
                                              nil t)
                                         (line-end-position)))))
         (when end-pos
-          (let ((all-lines (seq-filter
-                            (lambda (line) (string-match-p complete-rx line))
-                            (split-string (buffer-substring-no-properties 1 end-pos) "\n"))))
-            (setq current-response
-                  (concat current-response
-                          (mapconcat (lambda (line)
-                                       (assoc-default 'content
-                                                      (assoc-default
+          (let* ((all-lines (seq-filter
+                             (lambda (line) (string-match-p complete-rx line))
+                             (split-string (buffer-substring-no-properties 1 end-pos) "\n")))
+                 (processed-lines
+                  (mapcar (lambda (line)
+                                       (let ((delta (assoc-default
                                                        'delta
                                                        (aref (assoc-default
                                                               'choices
                                                               (json-read-from-string
                                                                (replace-regexp-in-string "data: " "" line)))
                                                              0))))
-                                     (seq-subseq all-lines last-response) "")))
+                                         (or (assoc-default 'content delta)
+                                             (mapcar (lambda (call)
+                                                       (cons (assoc-default 'index call)
+                                                             (assoc-default 'function call)))
+                                                     (assoc-default 'tool_calls delta)))))
+                          (seq-subseq all-lines last-response))))
+            (if (stringp (car processed-lines))
+                ;; The data is a string - a normal response, which we just
+                ;; append to current-response (assuming it's also a string,
+                ;; which it should be).
+                (setq current-response
+                      (concat current-response (string-join processed-lines " ")))
+              ;; If this is a streaming function call, current-response will be
+              ;; a vector of function plists, containing the function name and the arguments
+              ;; as JSON.
+              (when (equal "" current-response)
+                (setq current-response (make-vector (length (car processed-lines))
+                                                    nil)))
+              (cl-loop for calls in processed-lines do
+                       (cl-loop for call in calls do
+                                (let ((plist (aref current-response (car call)))
+                                      (name (assoc-default 'name (cdr call)))
+                                      (arguments (assoc-default 'arguments (cdr call))))
+                                  (when name (setq plist (plist-put plist :name name)))
+                                  (setq plist (plist-put plist :arguments
+                                                         (concat (plist-get plist :arguments)
+                                                                 arguments)))
+                                  (aset current-response (car call) plist)))))
+            
             (setq last-response (length all-lines))))))
     (when (> (length current-response) (length llm-openai-current-response))
         (setq llm-openai-current-response current-response)
         (setq llm-openai-last-response last-response))
-    current-response))
+    ;; If we are dealing with function calling, massage it to look like the
+    ;; normal function calling output.
+    (if (vectorp current-response)
+        (mapcar (lambda (plist)
+                  ;; This first part of the cons is ignored in later processing.
+                  (cons 'function
+                        `((name . ,(plist-get plist :name))
+                          (arguments . ,(plist-get plist :arguments)))))
+                current-response)
+        current-response)))
 
 (cl-defmethod llm-chat-streaming ((provider llm-openai) prompt partial-callback
                                   response-callback error-callback)
@@ -270,6 +310,7 @@ them from 1 to however many are sent.")
                        :on-partial (lambda (data)
                                      (when-let ((response (llm-openai--get-partial-chat-response data)))
                                        (llm-request-callback-in-buffer buf partial-callback response)))
+                       :on-buffer-available #'llm-openai--reset-partial-chat-response
                        :on-success-raw (lambda (data)
                                          (let ((response (llm-openai--get-partial-chat-response data)))
                                            (llm-provider-utils-append-to-prompt prompt response)

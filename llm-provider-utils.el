@@ -176,7 +176,9 @@ that as the recorded assistant interaction."
         (append (llm-chat-prompt-interactions prompt)
                 (list (make-llm-chat-prompt-interaction
                        :role 'assistant
-                       :content output)))))
+                       :content (if (consp output)
+                                    (json-encode output)
+                                  output))))))
 
 (defun llm-provider-utils-execute-openai-function-calls (provider prompt response)
   "From OpenAI-compatible RESPONSE, execute function call.
