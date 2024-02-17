@@ -115,6 +115,56 @@ things.  Providers should probably issue a warning when using this."
     ((string-match-p "llama" model) 2048)
     ((string-match-p "starcoder" model) 8192))))
 
+(defun llm-provider-utils-openai-arguments (args)
+  "Convert ARGS to the Open AI function calling spec.
+ARGS is a list of `llm-function-arg' structs."
+  (let ((required (mapcar
+                   #'llm-function-arg-name
+                   (seq-filter #'llm-function-arg-required args))))
+    (append
+     `((type . object)
+       (properties
+        .
+        ,(mapcar (lambda (arg)
+                   `(,(llm-function-arg-name arg) .
+                     ,(if (and (listp (llm-function-arg-type arg))
+                               (llm-function-arg-p (car (llm-function-arg-type arg))))
+                          (llm-provider-utils-openai-arguments (llm-function-arg-type arg))
+                        (append
+                         `((type .
+                                 ,(pcase (llm-function-arg-type arg)
+                                    ('string 'string)
+                                    ('integer 'integer)
+                                    ('float 'number)
+                                    ('boolean 'boolean)
+                                    ((cl-type cons)
+                                     (pcase (car (llm-function-arg-type arg))
+                                       ('or (cdr (llm-function-arg-type arg)))
+                                       ('list 'array)
+                                       ('enum 'string)))
+                                    (_ (error "Unknown argument type: " (llm-function-arg-type arg))))))
+                         (when (llm-function-arg-description arg)
+                           `((description
+                              .
+                              ,(llm-function-arg-description arg))))
+                         (when (and (eq 'cons
+                                        (type-of (llm-function-arg-type arg))))
+                           (pcase (car (llm-function-arg-type arg))
+                             ('enum `((enum
+                                       .
+                                       ,(cdr (llm-function-arg-type arg)))))
+                             ('list
+                              `((items .
+                                       ,(if (llm-function-arg-p
+                                             (cadr (llm-function-arg-type arg)))
+                                            (llm-provider-utils-openai-arguments
+                                             (cdr (llm-function-arg-type arg)))
+                                          `((type . (cadr (llm-function-arg-type arg))))))))))))))
+                 args)))
+     (when required
+       `((required . ,required))))))
+
+;; The Open AI function calling spec follows the JSON schema spec.
 ;; See https://json-schema.org/understanding-json-schema.
 (defun llm-provider-utils-openai-function-spec (call)
   "Convert `llm-function-call' CALL to an Open AI function spec.
@@ -130,43 +180,8 @@ This returns a JSON object (a list that can be converted to JSON)."
           (description . ,(llm-function-call-description call)))
         (when (llm-function-call-args call)
           `((parameters
-             .
-             ,(let ((required (mapcar
-                               #'llm-function-arg-name
-                               (seq-filter #'llm-function-arg-required (llm-function-call-args call)))))
-                (append
-                 `((type . object)
-                   (properties
-                    .
-                    ,(mapcar (lambda (arg)
-                               `(,(llm-function-arg-name arg) .
-                                 ,(append
-                                   `((type .
-                                           ,(pcase (llm-function-arg-type arg)
-                                              ('string 'string)
-                                              ('integer 'integer)
-                                              ('float 'number)
-                                              ('boolean 'boolean)
-                                              ((cl-type cons)
-                                               (pcase (car (llm-function-arg-type arg))
-                                                 ('or (cdr (llm-function-arg-type arg)))
-                                                 ('list 'array)
-                                                 ('enum 'string)))
-                                              (_ (error "Unknown argument type: " (llm-function-arg-type arg))))))
-                                   (when (llm-function-arg-description arg)
-                                     `((description
-                                        .
-                                        ,(llm-function-arg-description arg))))
-                                   (when (and (eq 'cons
-                                                  (type-of (llm-function-arg-type arg))))
-                                     (pcase (car (llm-function-arg-type arg))
-                                       ('enum `((enum
-                                                 .
-                                                 ,(cdr (llm-function-arg-type arg)))))
-                                       ('list `((items . ((type . ,(cadr (llm-function-arg-type arg))))))))))))
-                             (llm-function-call-args call))))
-                 (when required
-                   `((required . ,required))))))))))))
+            .
+            ,(llm-provider-utils-openai-arguments (llm-function-call-args call)))))))))
 
 (defun llm-provider-utils-append-to-prompt (prompt output)
   "Append OUTPUT to PROMPT as an assistant interaction.
@@ -199,8 +214,9 @@ cons of functions called and their output."
         ;; called and the result.
         (cl-loop for func in response collect
                  (let* ((name (assoc-default 'name (cdr func)))
-                        (arguments (json-read-from-string
-                                    (assoc-default 'arguments (cdr func))))
+                        (arguments (let ((json-false nil))
+                                     (json-read-from-string
+                                      (assoc-default 'arguments (cdr func)))))
                         (function (seq-find
                                    (lambda (f) (equal name (llm-function-call-name f)))
                                    (llm-chat-prompt-functions prompt))))
