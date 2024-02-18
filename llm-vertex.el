@@ -149,15 +149,24 @@ KEY-GENTIME keeps track of when the key was generated, because the key must be r
   "Return the actual response from the RESPONSE struct returned.
 This handles different kinds of models."
   (pcase (type-of response)
-    ('vector (mapconcat #'llm-vertex--get-chat-response-streaming
-                        response ""))
+    ('vector (if (and (> (length response) 0) (stringp (aref response 0)))
+                 (mapconcat #'llm-vertex--get-chat-response-streaming
+                            response "")
+               (when (> (length response) 0)
+                 (llm-vertex--get-chat-response-streaming (aref response 0)))))
     ('cons (if (assoc-default 'candidates response)
                (let ((parts (assoc-default
                              'parts
                              (assoc-default 'content
                                             (aref (assoc-default 'candidates response) 0)))))
                  (if parts
-                     (assoc-default 'text (aref parts 0))
+                     (or (assoc-default 'text (aref parts 0))
+                         ;; Change function calling from almost Open AI's
+                         ;; standard format to exactly the format.
+                         (mapcar (lambda (call)
+                                   `(function . ,(mapcar (lambda (c) (if (eq (car c) 'args) (cons 'arguments (cdr c)) c))
+                                                         (cdar call))))
+                                 parts))
                    ""))
              "NOTE: No response was sent back by the LLM, the prompt may have violated safety checks."))))
 
@@ -179,17 +188,28 @@ This handles different kinds of models."
 PROMPT contains the input to the call to the chat API."
   (llm-provider-utils-combine-to-user-prompt prompt llm-vertex-example-prelude)
   (append
-     `((contents
-        .
-        ,(mapcar (lambda (interaction)
-                    `((role . ,(pcase (llm-chat-prompt-interaction-role interaction)
-                                 ('user "user")
-                                 ('assistant "model")))
-                      (parts .
-                              ((text . ,(llm-chat-prompt-interaction-content
-                                         interaction))))))
-                  (llm-chat-prompt-interactions prompt))))
-     (llm-vertex--chat-parameters prompt)))
+   `((contents
+      .
+      ,(mapcar (lambda (interaction)
+                 `((role . ,(pcase (llm-chat-prompt-interaction-role interaction)
+                              ('user "user")
+                              ('assistant "model")))
+                   (parts .
+                          ((text . ,(llm-chat-prompt-interaction-content
+                                     interaction))))))
+               (llm-chat-prompt-interactions prompt))))
+   (when (llm-chat-prompt-functions prompt)
+     ;; Although Gemini claims to be compatible with Open AI's function declaration,
+     ;; it's only somewhat compatible.
+     `(("tools" . ,(mapcar (lambda (tool)
+                             `((function_declarations . (((name . ,(llm-function-call-name tool))
+                                                          (description . ,(llm-function-call-description tool))
+                                                          (parameters
+                                                           .
+                                                           ,(llm-provider-utils-openai-arguments
+                                                             (llm-function-call-args tool))))))))
+                           (llm-chat-prompt-functions prompt)))))
+   (llm-vertex--chat-parameters prompt)))
 
 (defun llm-vertex--chat-parameters (prompt)
   "From PROMPT, create the parameters section.

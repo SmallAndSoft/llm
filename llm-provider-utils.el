@@ -214,9 +214,13 @@ cons of functions called and their output."
         ;; called and the result.
         (cl-loop for func in response collect
                  (let* ((name (assoc-default 'name (cdr func)))
-                        (arguments (let ((json-false nil))
-                                     (json-read-from-string
-                                      (assoc-default 'arguments (cdr func)))))
+                        ;; Gemini and Open AI have some differences we try to
+                        ;; compensate for here.
+                        (arguments (if (stringp (assoc-default 'arguments (cdr func)))
+                                       (let ((json-false nil))
+                                         (json-read-from-string
+                                          (assoc-default 'arguments (cdr func))))
+                                     (assoc-default 'arguments (cdr func))))
                         (function (seq-find
                                    (lambda (f) (equal name (llm-function-call-name f)))
                                    (llm-chat-prompt-functions prompt))))

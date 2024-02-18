@@ -30,6 +30,7 @@
 (require 'llm)
 (require 'llm-request)
 (require 'llm-vertex)
+(require 'llm-provider-utils)
 (require 'json)
 
 (cl-defstruct llm-gemini
@@ -90,10 +91,22 @@ If STREAMING-P is non-nil, use the streaming endpoint."
   (let ((response (llm-vertex--get-chat-response-streaming
                    (llm-request-sync (llm-gemini--chat-url provider nil)
                                      :data (llm-vertex--chat-request-streaming prompt)))))
-    (setf (llm-chat-prompt-interactions prompt)
-          (append (llm-chat-prompt-interactions prompt)
-                  (list (make-llm-chat-prompt-interaction :role 'assistant :content response))))
-    response))
+    (llm-provider-utils-append-to-prompt prompt response)
+    (llm-provider-utils-execute-openai-function-calls provider prompt response)))
+
+(cl-defmethod llm-chat-async ((provider llm-gemini) prompt response-callback error-callback)
+  (let ((buf (current-buffer)))
+    (llm-request-async (llm-gemini--chat-url provider nil)
+                       :data (llm-vertex--chat-request-streaming prompt)
+                       :on-success (lambda (data)
+                                     (let ((response (llm-vertex--get-chat-response-streaming data)))
+                                       (llm-provider-utils-append-to-prompt prompt response)
+                                       (llm-request-callback-in-buffer
+                                        buf response-callback
+                                        (llm-provider-utils-execute-openai-function-calls provider prompt response))))
+                       :on-error (lambda (_ data)
+                                   (llm-request-callback-in-buffer buf error-callback 'error
+                                                                   (llm-vertex--error-message data))))))
 
 (cl-defmethod llm-chat-streaming ((provider llm-gemini) prompt partial-callback response-callback error-callback)
   (let ((buf (current-buffer)))
@@ -104,10 +117,9 @@ If STREAMING-P is non-nil, use the streaming endpoint."
                                        (llm-request-callback-in-buffer buf partial-callback response)))
                        :on-success (lambda (data)
                                      (let ((response (llm-vertex--get-chat-response-streaming data)))
-                                     (setf (llm-chat-prompt-interactions prompt)
-                                           (append (llm-chat-prompt-interactions prompt)
-                                                   (list (make-llm-chat-prompt-interaction :role 'assistant :content response))))
-                                     (llm-request-callback-in-buffer buf response-callback response)))
+                                       (llm-provider-utils-append-to-prompt prompt response)
+                                       (llm-request-callback-in-buffer buf response-callback
+                                                                       (llm-provider-utils-execute-openai-function-calls provider prompt response))))
                        :on-error (lambda (_ data)
                                  (llm-request-callback-in-buffer buf error-callback 'error
                                                                  (llm-vertex--error-message data))))))
