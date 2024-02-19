@@ -229,7 +229,7 @@ nothing to add, in which case it is nil."
       `((generation_config . ,params-alist)))))
 
 (defun llm-vertex--process-and-return (provider prompt response)
-  "Process RESPONSE from the chat API.
+  "Process RESPONSE from the PROVIDER.
 
 This returns the response to be given to the client.
 

@@ -142,13 +142,21 @@ STREAMING if non-nil, turn on response streaming."
   (let (request-alist)
     (llm-provider-utils-combine-to-system-prompt prompt llm-openai-example-prelude)
     (when streaming (push `("stream" . ,t) request-alist))
-    (push `("messages" . ,(mapcar (lambda (p)
-                                    `(("role" . ,(pcase (llm-chat-prompt-interaction-role p)
-                                                   ('user "user")
-                                                   ('system "system")
-                                                   ('assistant "assistant")))
-                                      ("content" . ,(string-trim (llm-chat-prompt-interaction-content p)))))
-                                  (llm-chat-prompt-interactions prompt)))
+    (push `("messages" .
+            ,(mapcar (lambda (p)
+                       (append
+                        `(("role" . ,(llm-chat-prompt-interaction-role p))
+                          ("content" . ,(let ((content
+                                               (llm-chat-prompt-interaction-content p)))
+                                          (if (stringp content) content
+                                            (json-encode content)))))
+                        (when-let ((fc (llm-chat-prompt-interaction-function-call-result p)))
+                          (append
+                           (when (llm-chat-prompt-function-call-result-call-id fc)
+                             `(("tool_call_id" .
+                                ,(llm-chat-prompt-function-call-result-call-id fc))))
+                           `(("name" . ,(llm-chat-prompt-function-call-result-function-name fc)))))))
+                     (llm-chat-prompt-interactions prompt)))
           request-alist)
     (push `("model" . ,(or model "gpt-3.5-turbo-0613")) request-alist)
     (when (llm-chat-prompt-temperature prompt)
@@ -164,12 +172,50 @@ STREAMING if non-nil, turn on response streaming."
 (defun llm-openai--extract-chat-response (response)
   "Return chat response from server RESPONSE."
   (let ((result (cdr (assoc 'content (cdr (assoc 'message (aref (cdr (assoc 'choices response)) 0))))))
-        (func-result (mapcar #'cl-third
-                             (assoc-default
-                              'tool_calls
-                              (assoc-default 'message
-                                             (aref (assoc-default 'choices response) 0))))))
+        (func-result (assoc-default
+                      'tool_calls
+                      (assoc-default 'message
+                                     (aref (assoc-default 'choices response) 0)))))
     (or func-result result)))
+
+(cl-defmethod llm-provider-utils-populate-function-calls ((_ llm-openai) prompt calls)
+  (llm-provider-utils-append-to-prompt
+   prompt
+   (mapcar (lambda (call)
+             `((id . ,(llm-provider-utils-function-call-id call))
+               (function (name . ,(llm-provider-utils-function-call-name call))
+                         (arguments . ,(json-encode
+                                        (llm-provider-utils-function-call-args call))))))
+           calls)))
+
+(defun llm-openai--normalize-function-calls (response)
+  "Transform RESPONSE from what Open AI returns to our neutral format."
+  (if (vectorp response)
+      (mapcar (lambda (call)
+                (let ((function (cl-third call)))
+                  (make-llm-provider-utils-function-call
+                   :id (assoc-default 'id call)
+                   :name (assoc-default 'name function)
+                   :args (json-read-from-string (assoc-default 'arguments function)))))
+              response)
+    response))
+
+(defun llm-openai--process-and-return (provider prompt response &optional error-callback)
+  "Process RESPONSE from the PROVIDER.
+
+This function adds the response to the prompt, executes any
+functions, and returns the value that the client should get back.
+
+PROMPT is the prompt that needs to be updated with the response."
+  (if (cdr (assoc 'error response))
+      (progn
+        (when error-callback
+          (funcall error-callback 'error (llm-openai--error-message response)))
+        response)
+    ;; When it isn't an error
+    (llm-provider-utils-execute-openai-function-calls
+     provider prompt
+     (llm-openai--normalize-function-calls (llm-openai--extract-chat-response response)))))
 
 (cl-defmethod llm-chat-async ((provider llm-openai) prompt response-callback error-callback)
   (llm-openai--check-key provider)
@@ -178,11 +224,10 @@ STREAMING if non-nil, turn on response streaming."
       :headers (llm-openai--headers provider)
       :data (llm-openai--chat-request (llm-openai-chat-model provider) prompt)
       :on-success (lambda (data)
-                    (let ((response (llm-openai--extract-chat-response data)))
-                      (llm-provider-utils-append-to-prompt prompt response)
-                      (llm-request-callback-in-buffer
+                    (llm-request-callback-in-buffer
                        buf response-callback
-                       (llm-provider-utils-execute-openai-function-calls provider prompt response))))
+                       (llm-openai--process-and-return
+                        provider prompt data error-callback)))
       :on-error (lambda (_ data)
                   (let ((errdata (cdr (assoc 'error data))))
                     (llm-request-callback-in-buffer buf error-callback 'error
@@ -192,14 +237,13 @@ STREAMING if non-nil, turn on response streaming."
 
 (cl-defmethod llm-chat ((provider llm-openai) prompt)
   (llm-openai--check-key provider)
-  (let ((response (llm-openai--handle-response
-                   (llm-request-sync (llm-openai--url provider "chat/completions")
-                                     :headers (llm-openai--headers provider)
-                                     :data (llm-openai--chat-request (llm-openai-chat-model provider)
-                                                                     prompt))
-                   #'llm-openai--extract-chat-response)))
-    (llm-provider-utils-append-to-prompt prompt response)
-    (llm-provider-utils-execute-openai-function-calls provider prompt response)))
+  (llm-openai--process-and-return
+   provider prompt
+   (llm-request-sync
+    (llm-openai--url provider "chat/completions")
+    :headers (llm-openai--headers provider)
+    :data (llm-openai--chat-request (llm-openai-chat-model provider)
+                                    prompt))))
 
 (defvar-local llm-openai-current-response ""
   "The response so far from the server.")
@@ -299,14 +343,14 @@ them from 1 to however many are sent.")
                                                       (cdr (assoc 'message errdata))))))
                        :on-partial (lambda (data)
                                      (when-let ((response (llm-openai--get-partial-chat-response data)))
-                                       (llm-request-callback-in-buffer buf partial-callback response)))
+                                       (when (> (length data) 0)
+                                         (llm-request-callback-in-buffer buf partial-callback response))))
                        :on-buffer-available #'llm-openai--reset-partial-chat-response
                        :on-success-raw (lambda (data)
-                                         (let ((response (llm-openai--get-partial-chat-response data)))
-                                           (llm-provider-utils-append-to-prompt prompt response)
-                                           (llm-request-callback-in-buffer
-                                            buf response-callback
-                                            (llm-provider-utils-execute-openai-function-calls provider prompt response)))))))
+                                         (llm-openai--process-and-return
+                                          provider prompt
+                                          (llm-openai--get-partial-chat-response data)
+                                          error-callback)))))
 
 (cl-defmethod llm-name ((_ llm-openai))
   "Open AI")

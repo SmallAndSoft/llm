@@ -96,8 +96,7 @@ called IF the LLM supports them. If the LLM does not support
 them, a `not-implemented' signal will be thrown. This is
 optional. When this is given, the LLM will either call the
 function or return text as normal, depending on what the LLM
-decides. This can be influenced by the `forced-function'
-parameter.
+decides.
 
 TEMPERATURE is a floating point number with a minimum of 0, and
 maximum of 1, which controls how predictable the result is, with
@@ -109,8 +108,23 @@ MAX-TOKENS is the maximum number of tokens to generate.  This is optional."
 
 (cl-defstruct llm-chat-prompt-interaction
   "This defines a single interaction given as part of a chat prompt.
-ROLE can a symbol, of either `user', `assistant', or `function'."
-  role content)
+ROLE can a symbol, of either `user', `assistant', or `function'.
+
+FUNCTION-CALL-RESULTS is a struct of type
+`llm-chat-prompt-function-call-results', which is only populated
+if `role' is `function'."  It stores the results of just one
+function call.
+  role content function-call-result)
+
+(cl-defstruct llm-chat-prompt-function-call-result
+  "This defines the result from a function call.
+
+CALL-ID is an ID for this function call, if available.
+
+FUNCTION-NAME is the name of the function. This is required.
+
+RESULT is the result of the function call.  This is required."
+  call-id function-name result)
 
 (cl-defstruct llm-function-call
   "This is a struct to represent a function call the LLM can make.
