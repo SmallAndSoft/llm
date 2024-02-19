@@ -82,6 +82,17 @@ If STREAMING-P is non-nil, use the streaming endpoint."
           (if streaming-p "streamGenerateContent" "generateContent")
           (llm-gemini-key provider)))
 
+(cl-defmethod llm-provider-utils-populate-function-calls ((_ llm-gemini) prompt calls)
+  (llm-provider-utils-append-to-prompt
+   prompt
+   ;; For Vertex there is just going to be one call
+   (mapcar (lambda (fc)
+             `((functionCall
+                .
+                ((name . ,(llm-provider-utils-function-call-name fc))
+                 (args . ,(llm-provider-utils-function-call-args fc))))))
+           calls)))
+
 (defun llm-gemini--chat-request (prompt)
   "Return the chat request for PROMPT."
   (mapcar (lambda (c) (if (eq (car c) 'generation_config)

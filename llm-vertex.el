@@ -118,7 +118,7 @@ KEY-GENTIME keeps track of when the key was generated, because the key must be r
             (assoc-default 'message err))))
 
 (defun llm-vertex--handle-response (response extractor)
-  "If RESPONSE is an error, throw it, else call EXTRACTOR."
+  "If RESPONSE is an errorp, throw it, else call EXTRACTOR."
   (if (assoc 'error response)
       (error (llm-vertex--error-message response))
     (funcall extractor response)))
@@ -200,18 +200,26 @@ PROMPT contains the input to the call to the chat API."
                                          interaction))
                                `(((text . ,(llm-chat-prompt-interaction-content
                                            interaction))))
-                             (llm-chat-prompt-interaction-content interaction)))))
+                             (if (eq 'function
+                                     (llm-chat-prompt-interaction-role interaction))
+                                 (let ((fc (llm-chat-prompt-interaction-function-call-result p)))
+                                   `(((functionResponse
+                                       .
+                                       ((name . ,(llm-chat-prompt-function-call-result-function-name fc))
+                                        (response . ,(llm-chat-prompt-function-call-result-result fc)))))))
+                               (llm-chat-prompt-interaction-content interaction))))))
                (llm-chat-prompt-interactions prompt))))
    (when (llm-chat-prompt-functions prompt)
      ;; Although Gemini claims to be compatible with Open AI's function declaration,
      ;; it's only somewhat compatible.
-     `(("tools" . ,(mapcar (lambda (tool)
-                             `((function_declarations . (((name . ,(llm-function-call-name tool))
-                                                          (description . ,(llm-function-call-description tool))
-                                                          (parameters
-                                                           .
-                                                           ,(llm-provider-utils-openai-arguments
-                                                             (llm-function-call-args tool))))))))
+     `(("tools" .
+        ,(mapcar (lambda (tool)
+                   `((function_declarations . (((name . ,(llm-function-call-name tool))
+                                                (description . ,(llm-function-call-description tool))
+                                                (parameters
+                                                 .
+                                                 ,(llm-provider-utils-openai-arguments
+                                                   (llm-function-call-args tool))))))))
                            (llm-chat-prompt-functions prompt)))))
    (llm-vertex--chat-parameters prompt)))
 
@@ -228,7 +236,28 @@ nothing to add, in which case it is nil."
     (when params-alist
       `((generation_config . ,params-alist)))))
 
-(defun llm-vertex--process-and-return (provider prompt response)
+(defun llm-vertex--normalize-function-calls (response)
+  "If RESPONSE has function calls, transform them to our common format."
+  (if (consp response)
+      (mapcar (lambda (f)
+                (make-llm-provider-utils-function-call
+                 :name (assoc-default 'name (cdr f))
+                 :args (assoc-default 'arguments (cdr f))))
+              response)
+    response))
+
+(cl-defmethod llm-provider-utils-populate-function-calls ((_ llm-vertex) prompt calls)
+  (llm-provider-utils-append-to-prompt
+   prompt
+   ;; For Vertex there is just going to be one call
+   (mapcar (lambda (fc)
+             `((functionCall
+                .
+                ((name . ,(llm-provider-utils-function-call-name fc))
+                 (args . ,(llm-provider-utils-function-call-args fc))))))
+           calls)))
+
+(defun llm-vertex--process-and-return (provider prompt response &optional error-callback)
   "Process RESPONSE from the PROVIDER.
 
 This returns the response to be given to the client.
@@ -237,35 +266,18 @@ Any functions will be executed.
 
 The response will be added to PROMPT.
 
-PROVIDER is the llm provider, for logging purposes."
-  (let* ((parsed-response (llm-vertex--get-chat-response-streaming response))
-         (response-for-client (llm-provider-utils-execute-openai-function-calls provider prompt parsed-response)))
-    (llm-provider-utils-append-to-prompt
-     prompt
-     (if (stringp response-for-client)
-         response-for-client
-       `(((functionCall . ,(mapcar
-                            (lambda (c)
-                              (if (eq (car c) 'arguments)
-                                  (cons 'args (cdr c))
-                                c))
-                            (cdar parsed-response)))))))
-    (unless (stringp response-for-client)
-      (llm-provider-utils-append-to-prompt
-       prompt
-       ;; This is a list of function calls names to response conses. However, as
-       ;; far as I can tell from examples such as
-       ;; https://ai.google.dev/docs/function_calling#function-calling-curl-samples,
-       ;; there can only be one function called, so we just take the first call here.
-       `(((functionResponse
-           .
-           ,(car (mapcar (lambda (call-and-result)
-                          `((name . ,(car call-and-result))
-                            (response . ((name . ,(car call-and-result))
-                                         (content . ,(cdr call-and-result))))))
-                        response-for-client)))))
-       'function))
-    response-for-client))
+Provider is the llm provider, for logging purposes.
+
+ERROR-CALLBACK is called when an error is detected."
+  (if (assoc-default 'error response)
+      (progn
+        (when error-callback
+          (funcall error-callback 'error (llm-vertex--error-message response)))
+        response))
+  (llm-provider-utils-execute-openai-function-calls
+   provider prompt
+   (llm-vertex--normalize-function-calls
+    (llm-vertex--get-chat-response-streaming response))))
 
 (defun llm-vertex--chat-url (provider &optional streaming)
 "Return the correct url to use for PROVIDER.
