@@ -211,6 +211,62 @@
                (message "SUCCESS: Provider %s provided a conversation with responses %s" (type-of provider) (buffer-string))
                (kill-buffer buf))))))))))
 
+(defun llm-tester-create-test-function-prompt ()
+  "Create a function to test function calling with."
+  (make-llm-chat-prompt
+                 :context "The user will describe an emacs lisp function they are looking
+for, and you need to provide the most likely function you know
+of by calling the `describe_function' function."
+                 :interactions (list (make-llm-chat-prompt-interaction
+                                      :role 'user
+                                      :content "I'm looking for a function that will return the current buffer's file name."))
+                 :temperature 0.1
+                 :functions
+                 (list (make-llm-function-call
+                        :function (lambda (f) f)
+                        :name "describe_function"
+                        :description "Takes a list of elisp function names and shows the user the functions and their descriptions."
+                        :args (list (make-llm-function-arg
+                                     :name "function_names"
+                                     :description "A list of function names to describe."
+                                     :type 'string
+                                     :required t))))))
+
+(defun llm-tester-function-calling-sync (provider)
+  "Test that PROVIDER can call functions."
+  (let ((prompt (llm-tester-create-test-function-prompt)))
+    (message "SUCCESS: Provider %s called a function and got result %s"
+             (type-of provider)
+             (llm-chat provider prompt))))
+
+(defun llm-tester-function-calling-async (provider)
+  "Test that PROVIDER can call functions asynchronously."
+  (let ((prompt (llm-tester-create-test-function-prompt)))
+    (llm-chat-async provider prompt
+                    (lambda (result)
+                      (message "SUCCESS: Provider %s called a function and got a result of %s"
+                               (type-of provider) result))
+                    (lambda (type message)
+                      (message "ERROR: Provider %s returned an error of type %s with message %s"
+                               (type-of provider) type message)))))
+
+(defun llm-tester-function-calling-streaming (provider)
+  "Test that PROVIDER can call functions with the streaming API."
+  (let ((partial-counts 0))
+    (llm-chat-streaming
+     provider
+     (llm-tester-create-test-function-prompt)
+     (lambda (_)
+       (cl-incf partial-counts))
+     (lambda (text)
+       (message "SUCCESS: Provider %s called a function and got a final result of %s"
+                (type-of provider) text)
+       (unless (= 0 partial-counts)
+         (message "WARNING: Provider %s returned partial updates, but it shouldn't for function calling" (type-of provider))))
+     (lambda (type message)
+       (message "ERROR: Provider %s returned an error of type %s with message %s"
+                (type-of provider) type message)))))
+
 (defun llm-tester-cancel (provider)
   "Test that PROVIDER can do async calls which can be cancelled."
   (message "Testing provider %s for cancellation" (type-of provider))

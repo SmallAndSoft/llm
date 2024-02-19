@@ -160,7 +160,7 @@ This handles different kinds of models."
                              (assoc-default 'content
                                             (aref (assoc-default 'candidates response) 0)))))
                  (if parts
-                     (or (assoc-default 'text (aref parts 0))
+                      (or (assoc-default 'text (aref parts 0))
                          ;; Change function calling from almost Open AI's
                          ;; standard format to exactly the format.
                          (mapcar (lambda (call)
@@ -193,10 +193,14 @@ PROMPT contains the input to the call to the chat API."
       ,(mapcar (lambda (interaction)
                  `((role . ,(pcase (llm-chat-prompt-interaction-role interaction)
                               ('user "user")
-                              ('assistant "model")))
+                              ('assistant "model")
+                              ('function "function")))
                    (parts .
-                          ((text . ,(llm-chat-prompt-interaction-content
-                                     interaction))))))
+                          ,(if (stringp (llm-chat-prompt-interaction-content
+                                         interaction))
+                               `(((text . ,(llm-chat-prompt-interaction-content
+                                           interaction))))
+                             (llm-chat-prompt-interaction-content interaction)))))
                (llm-chat-prompt-interactions prompt))))
    (when (llm-chat-prompt-functions prompt)
      ;; Although Gemini claims to be compatible with Open AI's function declaration,
@@ -224,28 +228,79 @@ nothing to add, in which case it is nil."
     (when params-alist
       `((generation_config . ,params-alist)))))
 
-(defun llm-vertex--chat-url (provider)
+(defun llm-vertex--process-and-return (provider prompt response)
+  "Process RESPONSE from the chat API.
+
+This returns the response to be given to the client.
+
+Any functions will be executed.
+
+The response will be added to PROMPT.
+
+PROVIDER is the llm provider, for logging purposes."
+  (let* ((parsed-response (llm-vertex--get-chat-response-streaming response))
+         (response-for-client (llm-provider-utils-execute-openai-function-calls provider prompt parsed-response)))
+    (llm-provider-utils-append-to-prompt
+     prompt
+     (if (stringp response-for-client)
+         response-for-client
+       `(((functionCall . ,(mapcar
+                            (lambda (c)
+                              (if (eq (car c) 'arguments)
+                                  (cons 'args (cdr c))
+                                c))
+                            (cdar parsed-response)))))))
+    (unless (stringp response-for-client)
+      (llm-provider-utils-append-to-prompt
+       prompt
+       ;; This is a list of function calls names to response conses. However, as
+       ;; far as I can tell from examples such as
+       ;; https://ai.google.dev/docs/function_calling#function-calling-curl-samples,
+       ;; there can only be one function called, so we just take the first call here.
+       `(((functionResponse
+           .
+           ,(car (mapcar (lambda (call-and-result)
+                          `((name . ,(car call-and-result))
+                            (response . ((name . ,(car call-and-result))
+                                         (content . ,(cdr call-and-result))))))
+                        response-for-client)))))
+       'function))
+    response-for-client))
+
+(defun llm-vertex--chat-url (provider &optional streaming)
 "Return the correct url to use for PROVIDER.
 If STREAMING is non-nil, use the URL for the streaming API."
-  (format "https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:streamGenerateContent"
+  (format "https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:%s"
           llm-vertex-gcloud-region
           (llm-vertex-project provider)
           llm-vertex-gcloud-region
-          (llm-vertex-chat-model provider)))
+          (llm-vertex-chat-model provider)
+          (if streaming "streamGenerateContent" "generateContent")))
 
 ;; API reference: https://cloud.google.com/vertex-ai/docs/generative-ai/multimodal/send-chat-prompts-gemini#gemini-chat-samples-drest
-
 (cl-defmethod llm-chat ((provider llm-vertex) prompt)
   ;; Gemini just has a streaming response, but we can just call it synchronously.
   (llm-vertex-refresh-key provider)
-  (let ((response (llm-vertex--get-chat-response-streaming
-                   (llm-request-sync (llm-vertex--chat-url provider)
-                                     :headers `(("Authorization" . ,(format "Bearer %s" (llm-vertex-key provider))))
-                                     :data (llm-vertex--chat-request-streaming prompt)))))
-    (setf (llm-chat-prompt-interactions prompt)
-          (append (llm-chat-prompt-interactions prompt)
-                  (list (make-llm-chat-prompt-interaction :role 'assistant :content response))))
-    response))
+  (llm-vertex--process-and-return
+     provider prompt
+     (llm-request-sync (llm-vertex--chat-url provider)
+                       :headers `(("Authorization" . ,(format "Bearer %s" (llm-vertex-key provider))))
+                       :data (llm-vertex--chat-request-streaming prompt))))
+
+(cl-defmethod llm-chat-async ((provider llm-vertex) prompt response-callback error-callback)
+  (llm-vertex-refresh-key provider)
+  (let ((buf (current-buffer)))
+    (llm-request-async (llm-vertex--chat-url provider)
+                       :headers `(("Authorization" . ,(format "Bearer %s" (llm-vertex-key provider))))
+                       :data (llm-vertex--chat-request-streaming prompt)
+                       :on-success (lambda (data)
+                                     (llm-request-callback-in-buffer
+                                      buf response-callback
+                                      (llm-vertex--process-and-return
+                                       provider prompt data)))
+                       :on-error (lambda (_ data)
+                                   (llm-request-callback-in-buffer buf error-callback 'error
+                                                                   (llm-vertex--error-message data))))))
 
 (cl-defmethod llm-chat-streaming ((provider llm-vertex) prompt partial-callback response-callback error-callback)
   (llm-vertex-refresh-key provider)
@@ -255,13 +310,13 @@ If STREAMING is non-nil, use the URL for the streaming API."
                      :data (llm-vertex--chat-request-streaming prompt)
                      :on-partial (lambda (partial)
                                    (when-let ((response (llm-vertex--get-partial-chat-response partial)))
-                                     (llm-request-callback-in-buffer buf partial-callback response)))
+                                     (when (> (length response) 0)
+                                       (llm-request-callback-in-buffer buf partial-callback response))))
                      :on-success (lambda (data)
-                                   (let ((response (llm-vertex--get-chat-response-streaming data)))
-                                     (setf (llm-chat-prompt-interactions prompt)
-                                           (append (llm-chat-prompt-interactions prompt)
-                                                   (list (make-llm-chat-prompt-interaction :role 'assistant :content response))))
-                                     (llm-request-callback-in-buffer buf response-callback response)))
+                                   (llm-request-callback-in-buffer
+                                    buf response-callback
+                                    (llm-vertex--process-and-return
+                                     provider prompt data)))
                      :on-error (lambda (_ data)
                                  (llm-request-callback-in-buffer buf error-callback 'error
                                                                  (llm-vertex--error-message data))))))

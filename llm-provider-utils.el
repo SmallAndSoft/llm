@@ -159,7 +159,7 @@ ARGS is a list of `llm-function-arg' structs."
                                              (cadr (llm-function-arg-type arg)))
                                             (llm-provider-utils-openai-arguments
                                              (cdr (llm-function-arg-type arg)))
-                                          `((type . (cadr (llm-function-arg-type arg))))))))))))))
+                                          `((type . ,(cadr (llm-function-arg-type arg))))))))))))))
                  args)))
      (when required
        `((required . ,required))))))
@@ -183,17 +183,17 @@ This returns a JSON object (a list that can be converted to JSON)."
             .
             ,(llm-provider-utils-openai-arguments (llm-function-call-args call)))))))))
 
-(defun llm-provider-utils-append-to-prompt (prompt output)
+(defun llm-provider-utils-append-to-prompt (prompt output &optional role)
   "Append OUTPUT to PROMPT as an assistant interaction.
 If OUTPUT is a function call, just convert it to JSON and append
-that as the recorded assistant interaction."
+that as the recorded assistant interaction.
+
+ROLE will be `assistant' by default, but can be passed in for other roles."
   (setf (llm-chat-prompt-interactions prompt)
         (append (llm-chat-prompt-interactions prompt)
                 (list (make-llm-chat-prompt-interaction
-                       :role 'assistant
-                       :content (if (consp output)
-                                    (json-encode output)
-                                  output))))))
+                       :role (or role 'assistant)
+                       :content output)))))
 
 (defun llm-provider-utils-execute-openai-function-calls (provider prompt response)
   "From OpenAI-compatible RESPONSE, execute function call.

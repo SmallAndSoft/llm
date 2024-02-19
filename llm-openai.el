@@ -159,16 +159,6 @@ STREAMING if non-nil, turn on response streaming."
       (push `("tools" . ,(mapcar #'llm-provider-utils-openai-function-spec
                                  (llm-chat-prompt-functions prompt)))
             request-alist))
-    (when (llm-chat-prompt-forced-function prompt)
-      (push `("tool_choice" . ,(pcase (llm-chat-prompt-forced-function prompt)
-                                 ("auto" "auto")
-                                 ("none" "none")
-                                 (_ `(("type" . "function")
-                                      ("function" .
-                                       (("name" .
-                                         ,(llm-chat-prompt-forced-function prompt))))))))
-
-            request-alist))
     request-alist))
 
 (defun llm-openai--extract-chat-response (response)

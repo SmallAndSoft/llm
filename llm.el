@@ -99,21 +99,17 @@ function or return text as normal, depending on what the LLM
 decides. This can be influenced by the `forced-function'
 parameter.
 
-FORCED-FUNCTION is the name of the function call to force or
-`none' to not call any function, or `auto', the default, to let
-the LLM decide which functions to call.
-
 TEMPERATURE is a floating point number with a minimum of 0, and
 maximum of 1, which controls how predictable the result is, with
 0 being the most predicatable, and 1 being the most creative.
 This is not required.
 
 MAX-TOKENS is the maximum number of tokens to generate.  This is optional."
-  context examples interactions functions forced-function temperature max-tokens)
+  context examples interactions functions temperature max-tokens)
 
 (cl-defstruct llm-chat-prompt-interaction
   "This defines a single interaction given as part of a chat prompt.
-ROLE can a symbol, of either `user' or `assistant'."
+ROLE can a symbol, of either `user', `assistant', or `function'."
   role content)
 
 (cl-defstruct llm-function-call
