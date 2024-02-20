@@ -98,7 +98,7 @@ If STREAMING-P is non-nil, use the streaming endpoint."
   (mapcar (lambda (c) (if (eq (car c) 'generation_config)
                           (cons 'generationConfig (cdr c))
                         c))
-          (llm-vertex--chat-request-streaming prompt)))
+          (llm-vertex--chat-request prompt)))
 
 (cl-defmethod llm-chat ((provider llm-gemini) prompt)
   (llm-vertex--process-and-return
@@ -146,7 +146,8 @@ If STREAMING-P is non-nil, use the streaming endpoint."
 (cl-defmethod llm-count-tokens ((provider llm-gemini) string)
   (llm-vertex--handle-response
    (llm-request-sync (llm-gemini--count-token-url provider)
-                     :data (llm-vertex--to-count-token-request (llm-vertex--chat-request-streaming (llm-make-simple-chat-prompt string))))
+                     :data (llm-vertex--to-count-token-request
+                            (llm-vertex--chat-request (llm-make-simple-chat-prompt string))))
    #'llm-vertex--count-tokens-extract-response))
 
 (cl-defmethod llm-name ((_ llm-gemini))

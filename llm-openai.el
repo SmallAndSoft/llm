@@ -171,7 +171,7 @@ STREAMING if non-nil, turn on response streaming."
 
 (defun llm-openai--extract-chat-response (response)
   "Return chat response from server RESPONSE."
-  (let ((result (cdr (assoc 'content (cdr (assoc 'message (aref (cdr (assoc 'choices response)) 0))))))
+  (let ((result (cdr (assoc 'content (cdr (assoc 'message (aref (cdr (assoc 'choices respons)) 0))))))
         (func-result (assoc-default
                       'tool_calls
                       (assoc-default 'message
@@ -207,15 +207,15 @@ This function adds the response to the prompt, executes any
 functions, and returns the value that the client should get back.
 
 PROMPT is the prompt that needs to be updated with the response."
-  (if (cdr (assoc 'error response))
+  (if (and (not (vectorp response)) (cdr (assoc 'error response)))
       (progn
         (when error-callback
           (funcall error-callback 'error (llm-openai--error-message response)))
         response)
     ;; When it isn't an error
-    (llm-provider-utils-execute-openai-function-calls
+    (llm-provider-utils-process-result
      provider prompt
-     (llm-openai--normalize-function-calls (llm-openai--extract-chat-response response)))))
+     (llm-openai--normalize-function-calls response))))
 
 (cl-defmethod llm-chat-async ((provider llm-openai) prompt response-callback error-callback)
   (llm-openai--check-key provider)
@@ -277,18 +277,15 @@ them from 1 to however many are sent.")
                              (split-string (buffer-substring-no-properties 1 end-pos) "\n")))
                  (processed-lines
                   (mapcar (lambda (line)
-                                       (let ((delta (assoc-default
-                                                       'delta
-                                                       (aref (assoc-default
-                                                              'choices
-                                                              (json-read-from-string
-                                                               (replace-regexp-in-string "data: " "" line)))
-                                                             0))))
-                                         (or (assoc-default 'content delta)
-                                             (mapcar (lambda (call)
-                                                       (cons (assoc-default 'index call)
-                                                             (assoc-default 'function call)))
-                                                     (assoc-default 'tool_calls delta)))))
+                            (let ((delta (assoc-default
+                                          'delta
+                                          (aref (assoc-default
+                                                 'choices
+                                                 (json-read-from-string
+                                                  (replace-regexp-in-string "data: " "" line)))
+                                                0))))
+                              (or (assoc-default 'content delta)
+                                  (assoc-default 'tool_calls delta))))
                           (seq-subseq all-lines last-response))))
             (if (stringp (car processed-lines))
                 ;; The data is a string - a normal response, which we just
@@ -303,29 +300,39 @@ them from 1 to however many are sent.")
                 (setq current-response (make-vector (length (car processed-lines))
                                                     nil)))
               (cl-loop for calls in processed-lines do
-                       (cl-loop for call in calls do
-                                (let ((plist (aref current-response (car call)))
-                                      (name (assoc-default 'name (cdr call)))
-                                      (arguments (assoc-default 'arguments (cdr call))))
+                       (cl-loop for call in (append calls nil) do
+                                (let* ((index (assoc-default 'index call))
+                                       (plist (aref current-response index))
+                                       (function (assoc-default 'function call))
+                                       (name (assoc-default 'name function))
+                                       (id (assoc-default 'id call))
+                                       (arguments (assoc-default 'arguments function)))
                                   (when name (setq plist (plist-put plist :name name)))
+                                  (when id (setq plist (plist-put plist :id id)))
                                   (setq plist (plist-put plist :arguments
                                                          (concat (plist-get plist :arguments)
                                                                  arguments)))
-                                  (aset current-response (car call) plist)))))
+                                  (aset current-response index plist)))))
             
             (setq last-response (length all-lines))))))
-    (when (> (length current-response) (length llm-openai-current-response))
+    ;; Has to be >= because when we store plists the length doesn't change, but
+    ;; we still want to store the new response. For text, it should indeed be
+    ;; ever-growing (but sometimes it shrinks and we don't want to store that).
+    (when (>= (length current-response) (length llm-openai-current-response))
         (setq llm-openai-current-response current-response)
         (setq llm-openai-last-response last-response))
     ;; If we are dealing with function calling, massage it to look like the
     ;; normal function calling output.
     (if (vectorp current-response)
-        (mapcar (lambda (plist)
-                  ;; This first part of the cons is ignored in later processing.
-                  (cons 'function
-                        `((name . ,(plist-get plist :name))
-                          (arguments . ,(plist-get plist :arguments)))))
-                current-response)
+        (apply #'vector
+               (mapcar (lambda (plist)
+                         `((id . ,(plist-get plist :id))
+                           (type . function)
+                           (function
+                            .
+                            ((name . ,(plist-get plist :name))
+                             (arguments . ,(plist-get plist :arguments))))))
+                       current-response))
         current-response)))
 
 (cl-defmethod llm-chat-streaming ((provider llm-openai) prompt partial-callback
@@ -337,20 +344,25 @@ them from 1 to however many are sent.")
                        :data (llm-openai--chat-request (llm-openai-chat-model provider) prompt t)
                        :on-error (lambda (_ data)
                                    (let ((errdata (cdr (assoc 'error data))))
-                                     (llm-request-callback-in-buffer buf error-callback 'error
-                                              (format "Problem calling Open AI: %s message: %s"
-                                                      (cdr (assoc 'type errdata))
-                                                      (cdr (assoc 'message errdata))))))
+                                     (llm-request-callback-in-buffer
+                                      buf error-callback 'error
+                                      (format "Problem calling Open AI: %s message: %s"
+                                              (cdr (assoc 'type errdata))
+                                              (cdr (assoc 'message errdata))))))
                        :on-partial (lambda (data)
                                      (when-let ((response (llm-openai--get-partial-chat-response data)))
-                                       (when (> (length data) 0)
+                                       ;; We only send partial text updates, not
+                                       ;; updates related to function calls.
+                                       (when (stringp response)
                                          (llm-request-callback-in-buffer buf partial-callback response))))
-                       :on-buffer-available #'llm-openai--reset-partial-chat-response
                        :on-success-raw (lambda (data)
-                                         (llm-openai--process-and-return
-                                          provider prompt
-                                          (llm-openai--get-partial-chat-response data)
-                                          error-callback)))))
+                                         (llm-request-callback-in-buffer
+                                          buf
+                                          response-callback
+                                          (llm-openai--process-and-return
+                                           provider prompt
+                                           (llm-openai--get-partial-chat-response data)
+                                           error-callback))))))
 
 (cl-defmethod llm-name ((_ llm-openai))
   "Open AI")

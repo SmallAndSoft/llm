@@ -221,7 +221,7 @@ FUNC is a `llm-provider-utils-function-call' struct."
                   :function-name (llm-provider-utils-function-call-name func)
                   :result result)))
 
-(defun llm-provider-utils-execute-openai-function-calls (provider prompt response)
+(defun llm-provider-utils-process-result (provider prompt response)
   "From RESPONSE, execute function call.
 
 RESPONSE is either a string or list of

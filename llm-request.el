@@ -110,7 +110,7 @@ is zero."
                    url-http-end-of-headers)
           (funcall llm-request--partial-callback (llm-request--content)))))))
 
-(cl-defun llm-request-async (url &key headers data on-success on-success-raw on-error on-partial on-buffer-available)
+(cl-defun llm-request-async (url &key headers data on-success on-success-raw on-error on-partial)
   "Make a request to URL.
 Nothing will be returned.
 
@@ -133,12 +133,7 @@ body as a string.  This is an optional argument.
 ON-SUCCESS-RAW, if set, will be called in the buffer with the
 response body, and expect the response content. This is an
 optional argument, and mostly useful for streaming.  If not set,
-the buffer is turned into JSON and passed to ON-SUCCESS.
-
-ON-BUFFER-AVAILABLE will be called with the buffer when it is
-first set up and newly available. This is useful to reset any
-buffer local variables, because buffers might be re-used. It does
-not take any arguments."
+the buffer is turned into JSON and passed to ON-SUCCESS."
   (let ((url-request-method "POST")
         ;; This is necessary for streaming, otherwise we get gzip'd data that is
         ;; unparseable until the end. The responses should be small enough that
@@ -163,9 +158,6 @@ not take any arguments."
                                            (json-read-from-string (llm-request--content)))))))
             (list on-success on-error)
             t)))
-      (when (and on-buffer-available buffer)
-        (with-current-buffer buffer
-          (funcall on-buffer-available)))
       (when (and buffer on-partial)
         (with-current-buffer buffer
           (setq llm-request--partial-callback on-partial)

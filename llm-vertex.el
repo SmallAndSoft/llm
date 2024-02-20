@@ -183,7 +183,7 @@ This handles different kinds of models."
           (setq result (concat result (json-read-from-string (match-string 1))))))
       result)))
 
-(defun llm-vertex--chat-request-streaming (prompt)
+(defun llm-vertex--chat-request (prompt)
   "Return an alist with chat input for the streaming API.
 PROMPT contains the input to the call to the chat API."
   (llm-provider-utils-combine-to-user-prompt prompt llm-vertex-example-prelude)
@@ -279,7 +279,7 @@ ERROR-CALLBACK is called when an error is detected."
           (funcall error-callback 'error (llm-vertex--error-message response)))
         response))
   (let ((return-val
-         (llm-provider-utils-execute-openai-function-calls
+         (llm-provider-utils-process-result
           provider prompt
           (llm-vertex--normalize-function-calls
            (llm-vertex--get-chat-response-streaming response)))))
@@ -315,14 +315,14 @@ If STREAMING is non-nil, use the URL for the streaming API."
      provider prompt
      (llm-request-sync (llm-vertex--chat-url provider)
                        :headers `(("Authorization" . ,(format "Bearer %s" (llm-vertex-key provider))))
-                       :data (llm-vertex--chat-request-streaming prompt))))
+                       :data (llm-vertex--chat-request prompt))))
 
 (cl-defmethod llm-chat-async ((provider llm-vertex) prompt response-callback error-callback)
   (llm-vertex-refresh-key provider)
   (let ((buf (current-buffer)))
     (llm-request-async (llm-vertex--chat-url provider)
                        :headers `(("Authorization" . ,(format "Bearer %s" (llm-vertex-key provider))))
-                       :data (llm-vertex--chat-request-streaming prompt)
+                       :data (llm-vertex--chat-request prompt)
                        :on-success (lambda (data)
                                      (llm-request-callback-in-buffer
                                       buf response-callback
@@ -337,7 +337,7 @@ If STREAMING is non-nil, use the URL for the streaming API."
   (let ((buf (current-buffer)))
     (llm-request-async (llm-vertex--chat-url provider)
                      :headers `(("Authorization" . ,(format "Bearer %s" (llm-vertex-key provider))))
-                     :data (llm-vertex--chat-request-streaming prompt)
+                     :data (llm-vertex--chat-request prompt)
                      :on-partial (lambda (partial)
                                    (when-let ((response (llm-vertex--get-partial-chat-response partial)))
                                      (when (> (length response) 0)
@@ -379,7 +379,7 @@ MODEL "
    (llm-request-sync (llm-vertex--count-token-url provider)
                      :headers `(("Authorization" . ,(format "Bearer %s" (llm-vertex-key provider))))
                      :data (llm-vertex--to-count-token-request
-                            (llm-vertex--chat-request-streaming
+                            (llm-vertex--chat-request
                              (llm-make-simple-chat-prompt string))))
    #'llm-vertex--count-tokens-extract-response))
 

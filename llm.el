@@ -123,7 +123,7 @@ CALL-ID is an ID for this function call, if available.
 
 FUNCTION-NAME is the name of the function. This is required.
 
-RESULT is the result of the function call.  This is required."
+RESULT is the result of the function call. This is required."
   call-id function-name result)
 
 (cl-defstruct llm-function-call
