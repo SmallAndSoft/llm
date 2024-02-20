@@ -241,14 +241,19 @@ of by calling the `describe_function' function."
 
 (defun llm-tester-function-calling-conversation-sync (provider)
   "Test that PROVIDER can call functions in a conversation."
-  (let ((prompt (llm-tester-create-test-function-prompt)))
-    (message "SUCCESS: Provider %s called a function and got result %s"
-             (type-of provider)
-             (llm-chat provider prompt))
+  (let ((prompt (llm-tester-create-test-function-prompt))
+        (responses nil))
+    (push (llm-chat provider prompt) responses)
+    ;; The expectation (a requirement for Gemini) is we call back into the LLM
+    ;; with the results of the previous call to get a text response based on the
+    ;; function call results.
+    (push (llm-chat provider prompt) responses)
     (llm-chat-prompt-append-response prompt "I'm now looking for a function that will return the directory of a filename")
-    (message "SUCCESS: Provider %s continued the function conversation and got result %s"
+    (push (llm-chat provider prompt) responses)
+    (push (llm-chat provider prompt) responses)
+    (message "SUCCESS: Provider %s had a function conversation and got results %s"
              (type-of provider)
-             (llm-chat provider prompt))))
+             (nreverse responses))))
 
 (defun llm-tester-function-calling-async (provider)
   "Test that PROVIDER can call functions asynchronously."
@@ -263,22 +268,22 @@ of by calling the `describe_function' function."
 
 (defun llm-tester-function-calling-conversation-async (provider)
   "Test that PROVIDER can call functions in a conversation."
-  (let ((prompt (llm-tester-create-test-function-prompt)))
-    (llm-chat-async provider prompt
-                    (lambda (result)
-                      (message "SUCCESS: Provider %s called a function and got result %s"
-                               (type-of provider) result)
-                      (llm-chat-prompt-append-response prompt "I'm now looking for a function that will return the directory of a filename")
-                      (llm-chat-async provider prompt
-                                      (lambda (result)
-                                        (message "SUCCESS: Provider %s continued the function conversation and got result %s"
-                                                 (type-of provider) result))
-                                      (lambda (type message)
-                                        (message "ERROR: Provider %s returned an error of type %s with message %s"
-                                                 (type-of provider) type message))))
-                    (lambda (type message)
-                      (message "ERROR: Provider %s returned an error of type %s with message %s"
-                               (type-of provider) type message)))))
+  (let* ((prompt (llm-tester-create-test-function-prompt))
+         (responses nil)
+         (error-callback (lambda (type msg) (message "FAILURE: async function calling conversation for %s, error of type %s received: %s" (type-of provider) type msg)))
+         (last-callback (lambda (result)
+                          (push result responses)
+                          (message "SUCCESS: Provider %s had an async function calling conversation, and got results %s"
+                                   (type-of provider)
+                                   (nreverse responses))))
+         (third-callback (lambda (result) (push result responses)
+                           (llm-chat-async provider prompt last-callback error-callback)))
+         (second-callback (lambda (result) (push result responses)
+                            (llm-chat-prompt-append-response prompt "I'm now looking for a function that will return the directory of a filename.")
+                            (llm-chat-async provider prompt third-callback error-callback)))
+         (first-callback (lambda (result) (push result responses)
+                           (llm-chat-async provider prompt second-callback error-callback))))
+    (llm-chat-async provider prompt first-callback error-callback)))
 
 (defun llm-tester-function-calling-streaming (provider)
   "Test that PROVIDER can call functions with the streaming API."

@@ -282,19 +282,7 @@ ERROR-CALLBACK is called when an error is detected."
          (llm-provider-utils-process-result
           provider prompt
           (llm-vertex--normalize-function-calls
-           (llm-vertex--get-chat-response-streaming response)))))
-    ;; According to the examples at
-    ;; https://cloud.google.com/vertex-ai/docs/generative-ai/multimodal/function-calling,
-    ;; the model needs a turn after the function call, but the model does not
-    ;; return a turn. We would have to call the model AGAIN to get a value.
-    (unless (stringp return-val)
-      ;; We take this to mean we need to run asynchronously.
-      (if error-callback
-          (llm-chat-async provider prompt (lambda (response)
-                                            (llm-vertex--process-and-return
-                                            provider prompt response error-callback))
-                          error-callback)
-        (llm-chat provider prompt)))
+           (llm-vertex--get-chat-response-streaming response)))))    
     return-val))
 
 (defun llm-vertex--chat-url (provider &optional streaming)

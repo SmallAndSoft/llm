@@ -207,7 +207,7 @@ This function adds the response to the prompt, executes any
 functions, and returns the value that the client should get back.
 
 PROMPT is the prompt that needs to be updated with the response."
-  (if (and (not (vectorp response)) (cdr (assoc 'error response)))
+  (if (and (consp response) (cdr (assoc 'error response)))
       (progn
         (when error-callback
           (funcall error-callback 'error (llm-openai--error-message response)))
@@ -215,7 +215,9 @@ PROMPT is the prompt that needs to be updated with the response."
     ;; When it isn't an error
     (llm-provider-utils-process-result
      provider prompt
-     (llm-openai--normalize-function-calls response))))
+     (llm-openai--normalize-function-calls
+      (if (consp response) (llm-openai--extract-chat-response response)
+        (llm-openai--get-partial-chat-response response))))))
 
 (cl-defmethod llm-chat-async ((provider llm-openai) prompt response-callback error-callback)
   (llm-openai--check-key provider)
@@ -361,8 +363,7 @@ them from 1 to however many are sent.")
                                           response-callback
                                           (llm-openai--process-and-return
                                            provider prompt
-                                           (llm-openai--get-partial-chat-response data)
-                                           error-callback))))))
+                                           data error-callback))))))
 
 (cl-defmethod llm-name ((_ llm-openai))
   "Open AI")
