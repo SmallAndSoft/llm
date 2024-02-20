@@ -225,10 +225,10 @@ of by calling the `describe_function' function."
                  (list (make-llm-function-call
                         :function (lambda (f) f)
                         :name "describe_function"
-                        :description "Takes a list of elisp function names and shows the user the functions and their descriptions."
+                        :description "Takes an elisp function name and shows the user the functions and their descriptions."
                         :args (list (make-llm-function-arg
-                                     :name "function_names"
-                                     :description "A list of function names to describe."
+                                     :name "function_name"
+                                     :description "A function name to describe."
                                      :type 'string
                                      :required t))))))
 
@@ -239,6 +239,17 @@ of by calling the `describe_function' function."
              (type-of provider)
              (llm-chat provider prompt))))
 
+(defun llm-tester-function-calling-conversation-sync (provider)
+  "Test that PROVIDER can call functions in a conversation."
+  (let ((prompt (llm-tester-create-test-function-prompt)))
+    (message "SUCCESS: Provider %s called a function and got result %s"
+             (type-of provider)
+             (llm-chat provider prompt))
+    (llm-chat-prompt-append-response prompt "I'm now looking for a function that will return the directory of a filename")
+    (message "SUCCESS: Provider %s continued the function conversation and got result %s"
+             (type-of provider)
+             (llm-chat provider prompt))))
+
 (defun llm-tester-function-calling-async (provider)
   "Test that PROVIDER can call functions asynchronously."
   (let ((prompt (llm-tester-create-test-function-prompt)))
@@ -246,6 +257,25 @@ of by calling the `describe_function' function."
                     (lambda (result)
                       (message "SUCCESS: Provider %s called a function and got a result of %s"
                                (type-of provider) result))
+                    (lambda (type message)
+                      (message "ERROR: Provider %s returned an error of type %s with message %s"
+                               (type-of provider) type message)))))
+
+(defun llm-tester-function-calling-conversation-async (provider)
+  "Test that PROVIDER can call functions in a conversation."
+  (let ((prompt (llm-tester-create-test-function-prompt)))
+    (llm-chat-async provider prompt
+                    (lambda (result)
+                      (message "SUCCESS: Provider %s called a function and got result %s"
+                               (type-of provider) result)
+                      (llm-chat-prompt-append-response prompt "I'm now looking for a function that will return the directory of a filename")
+                      (llm-chat-async provider prompt
+                                      (lambda (result)
+                                        (message "SUCCESS: Provider %s continued the function conversation and got result %s"
+                                                 (type-of provider) result))
+                                      (lambda (type message)
+                                        (message "ERROR: Provider %s returned an error of type %s with message %s"
+                                                 (type-of provider) type message))))
                     (lambda (type message)
                       (message "ERROR: Provider %s returned an error of type %s with message %s"
                                (type-of provider) type message)))))

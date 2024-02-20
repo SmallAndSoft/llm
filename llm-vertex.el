@@ -196,17 +196,21 @@ PROMPT contains the input to the call to the chat API."
                               ('assistant "model")
                               ('function "function")))
                    (parts .
-                          ,(if (stringp (llm-chat-prompt-interaction-content
-                                         interaction))
+                          ,(if (and (not (equal (llm-chat-prompt-interaction-role interaction)
+                                                'function))
+                                    (stringp (llm-chat-prompt-interaction-content interaction)))
                                `(((text . ,(llm-chat-prompt-interaction-content
                                            interaction))))
                              (if (eq 'function
                                      (llm-chat-prompt-interaction-role interaction))
-                                 (let ((fc (llm-chat-prompt-interaction-function-call-result p)))
+                                 (let ((fc (llm-chat-prompt-interaction-function-call-result interaction)))
                                    `(((functionResponse
                                        .
                                        ((name . ,(llm-chat-prompt-function-call-result-function-name fc))
-                                        (response . ,(llm-chat-prompt-function-call-result-result fc)))))))
+                                        (response
+                                         .
+                                         ((name . ,(llm-chat-prompt-function-call-result-function-name fc))
+                                          (content . ,(llm-chat-prompt-function-call-result-result fc)))))))))
                                (llm-chat-prompt-interaction-content interaction))))))
                (llm-chat-prompt-interactions prompt))))
    (when (llm-chat-prompt-functions prompt)
@@ -274,10 +278,24 @@ ERROR-CALLBACK is called when an error is detected."
         (when error-callback
           (funcall error-callback 'error (llm-vertex--error-message response)))
         response))
-  (llm-provider-utils-execute-openai-function-calls
-   provider prompt
-   (llm-vertex--normalize-function-calls
-    (llm-vertex--get-chat-response-streaming response))))
+  (let ((return-val
+         (llm-provider-utils-execute-openai-function-calls
+          provider prompt
+          (llm-vertex--normalize-function-calls
+           (llm-vertex--get-chat-response-streaming response)))))
+    ;; According to the examples at
+    ;; https://cloud.google.com/vertex-ai/docs/generative-ai/multimodal/function-calling,
+    ;; the model needs a turn after the function call, but the model does not
+    ;; return a turn. We would have to call the model AGAIN to get a value.
+    (unless (stringp return-val)
+      ;; We take this to mean we need to run asynchronously.
+      (if error-callback
+          (llm-chat-async provider prompt (lambda (response)
+                                            (llm-vertex--process-and-return
+                                            provider prompt response error-callback))
+                          error-callback)
+        (llm-chat provider prompt)))
+    return-val))
 
 (defun llm-vertex--chat-url (provider &optional streaming)
 "Return the correct url to use for PROVIDER.

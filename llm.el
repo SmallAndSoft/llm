@@ -112,8 +112,8 @@ ROLE can a symbol, of either `user', `assistant', or `function'.
 
 FUNCTION-CALL-RESULTS is a struct of type
 `llm-chat-prompt-function-call-results', which is only populated
-if `role' is `function'."  It stores the results of just one
-function call.
+if `role' is `function'. It stores the results of just one
+function call."  
   role content function-call-result)
 
 (cl-defstruct llm-chat-prompt-function-call-result
