@@ -273,7 +273,8 @@ The response will be added to PROMPT.
 Provider is the llm provider, for logging purposes.
 
 ERROR-CALLBACK is called when an error is detected."
-  (if (assoc-default 'error response)
+  (if (and (consp response)
+           (assoc-default 'error response))
       (progn
         (when error-callback
           (funcall error-callback 'error (llm-vertex--error-message response)))

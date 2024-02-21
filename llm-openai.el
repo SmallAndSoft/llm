@@ -255,11 +255,6 @@ PROMPT is the prompt that needs to be updated with the response."
 The responses from OpenAI are not numbered, but we just number
 them from 1 to however many are sent.")
 
-(defun llm-openai--reset-partial-chat-response ()
-  "Reset the partial chat response."
-  (setq llm-openai-current-response "")
-  (setq llm-openai-last-response 0))
-
 (defun llm-openai--get-partial-chat-response (response)
   "Return the text in the partial chat response from RESPONSE."
   ;; To begin with, we should still be in the buffer with the actual response.
