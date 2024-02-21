@@ -384,6 +384,12 @@ them from 1 to however many are sent.")
       4096)
      (t 4096))))
 
+(cl-defmethod llm-capabilities ((_ llm-openai))
+  (list 'streaming 'embeddings 'function-calls))
+
+(cl-defmethod llm-capabilities ((_ llm-openai-compatible))
+  (list 'streaming 'embeddings))
+
 (provide 'llm-openai)
 
 ;;; llm-openai.el ends here

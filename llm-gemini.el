@@ -158,6 +158,9 @@ If STREAMING-P is non-nil, use the streaming endpoint."
 (cl-defmethod llm-chat-token-limit ((provider llm-gemini))
   (llm-vertex--chat-token-limit (llm-gemini-chat-model provider)))
 
+(cl-defmethod llm-capabilities ((_ llm-gemini))
+  (list 'streaming 'embeddings 'function-calls))
+
 (provide 'llm-gemini)
 
 ;;; llm-gemini.el ends here

@@ -387,6 +387,9 @@ MODEL "
 (cl-defmethod llm-chat-token-limit ((provider llm-vertex))
   (llm-vertex--chat-token-limit (llm-vertex-chat-model provider)))
 
+(cl-defmethod llm-capabilities ((_ llm-vertex))
+  (list 'streaming 'embeddings 'function-calls))
+
 (provide 'llm-vertex)
 
 ;;; llm-vertex.el ends here

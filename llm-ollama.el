@@ -215,6 +215,13 @@ PROVIDER is the llm-ollama provider to use."
 (cl-defmethod llm-chat-token-limit ((provider llm-ollama))
   (llm-provider-utils-model-token-limit (llm-ollama-chat-model provider)))
 
+(cl-defmethod llm-capabilities ((_ llm-ollama))
+  ;; Embeddings are supported in code, but the models generally do not yet
+  ;; support them. See https://github.com/ollama/ollama/issues/834,
+  ;; https://github.com/ollama/ollama/issues/327,
+  ;; https://github.com/ggerganov/llama.cpp/issues/2872.
+  (list 'streaming))
+
 (provide 'llm-ollama)
 
 ;;; llm-ollama.el ends here
