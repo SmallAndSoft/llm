@@ -171,7 +171,10 @@ STREAMING if non-nil, turn on response streaming."
 
 (defun llm-openai--extract-chat-response (response)
   "Return chat response from server RESPONSE."
-  (let ((result (cdr (assoc 'content (cdr (assoc 'message (aref (cdr (assoc 'choices respons)) 0))))))
+  (let ((result (cdr (assoc 'content
+                            (cdr (assoc
+                                  'message
+                                  (aref (cdr (assoc 'choices response)) 0))))))
         (func-result (assoc-default
                       'tool_calls
                       (assoc-default 'message
