@@ -98,7 +98,11 @@ the available buffers in the prompt."
 The definition is for a `llm-function-call'.
 
 What comes out should be close to correct, but it may need some
-manual intervention."
+manual intervention.
+
+The function spec here makes Gemini error out, perhaps because it
+uses more nested function specs. This may go away eventually as
+Gemini improves."
   (interactive "aFunction: ")
   (let ((marker (point-marker))
         (arglist (help-function-arglist f)))

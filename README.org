@@ -135,9 +135,13 @@ Function calling is a way to give the LLM a list of functions it can call, and h
 This basic structure is useful because it can guarantee a well-structured output
 (if the LLM does decide to call the function). *Not every LLM can handle function
 calling, and those that do not will ignore the functions entirely*. The function
-=llm-capabilities= will return a list with =function-calls= in it if the LLM supports
-function calls. Right now only Gemini, Vertex and Open AI support function
-calling. Ollama should get function calling soon.
+=llm-capabilities= will return a list with =function-calls= in it if the LLM
+supports function calls. Right now only Gemini, Vertex and Open AI support
+function calling. Ollama should get function calling soon. However, even for
+LLMs that handle function calling, there is a fair bit of difference in the
+capabilities. Right now, it is possible to write function calls that succeed in
+Open AI but cause errors in Gemini, because Gemini does not appear to handle
+functions that have types that contain other types.
 
 The way to call functions is to attach a list of functions to the
 =llm-function-call= slot in the prompt. This is a list of =llm-function-call=
