@@ -142,7 +142,7 @@ ARGS is a list of `llm-function-arg' structs."
                                        ('or (cdr (llm-function-arg-type arg)))
                                        ('list 'array)
                                        ('enum 'string)))
-                                    (_ (error "Unknown argument type: " (llm-function-arg-type arg))))))
+                                    (_ (error "Unknown argument type: %s" (llm-function-arg-type arg))))))
                          (when (llm-function-arg-description arg)
                            `((description
                               .
